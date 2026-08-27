@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tracecite-mcp"
+version = "0.1.0"
+description = "Thin MCP adapter for TraceCite agent capabilities"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "tracecite>=0.1.0,<0.2.0",
+  "mcp>=2,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1",
+  "pytest>=7",
+]
+
+[project.scripts]
+tracecite-mcp = "tracecite_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
