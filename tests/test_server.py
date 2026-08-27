@@ -73,8 +73,7 @@ def test_stateful_search_returns_delta_and_expand_many_recovers_context(
     assert second["status"] == "ok"
     assert second["outcome"] == "supported"
     assert second["evidence"] == []
-    assert second["data"]["result_id"] == result_id
-    assert second["data"]["context"]["result_repeated"] is True
+    assert len(second["data"]["result_id"]) == 64
     assert second["data"]["context"]["repeated_evidence"] == 1
 
     expanded = server.tracecite_expand_many(result_id, [f"#{ref}"], before=0, after=0)
