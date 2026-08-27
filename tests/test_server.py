@@ -19,6 +19,7 @@ def test_mcp_exposes_expected_thin_tool_surface() -> None:
         "tracecite_survey",
         "tracecite_search",
         "tracecite_expand",
+        "tracecite_expand_many",
         "tracecite_verify",
         "tracecite_investigation_create",
         "tracecite_validate_finding",
@@ -41,6 +42,61 @@ def test_probe_and_search_use_real_tracecite_core(tmp_path: Path) -> None:
     assert searched["evidence"][0]["uri"].startswith("evidence://sha256/")
 
 
+def test_stateful_search_returns_delta_and_expand_many_recovers_context(
+    tmp_path: Path, monkeypatch
+) -> None:
+    state_dir = tmp_path / "mcp-state"
+    source = tmp_path / "app.log"
+    source.write_text("alpha\ntarget event\nomega\n", encoding="utf-8")
+    monkeypatch.setenv("TRACECITE_MCP_STATE_DIR", str(state_dir))
+
+    first = server.tracecite_search(
+        str(source),
+        "target",
+        segmenter="rawtext",
+        context_id="case-1",
+    )
+    assert first["status"] == "ok"
+    assert len(first["evidence"]) == 1
+    # One tiny first-turn Evidence row is cheaper without Context metadata, so
+    # the public view may use the ordinary fallback. Seen-state must still be
+    # persisted because a later turn depends on it.
+    assert first["data"]["recovery_tool"] == "tracecite_expand_many"
+    assert (state_dir / "_contexts" / "case-1.json").is_file()
+    result_id = first["data"]["result_id"]
+    ref = first["evidence"][0]["uri"].split("#", 1)[1]
+
+    second = server.tracecite_search(
+        str(source),
+        "target",
+        segmenter="rawtext",
+        context_id="case-1",
+    )
+    assert second["status"] == "ok"
+    assert second["outcome"] == "supported"
+    assert second["evidence"] == []
+    assert len(second["data"]["result_id"]) == 64
+    assert second["data"]["context"]["new_evidence"] == 0
+    assert second["data"]["context"]["repeated_evidence"] == 1
+
+    expanded = server.tracecite_expand_many(result_id, [f"#{ref}"], before=0, after=0)
+    assert expanded["status"] == "ok"
+    assert expanded["coverage"]["returned"] == 1
+    assert "target event" in expanded["contexts"][0]["text"]
+
+
+def test_different_contexts_do_not_share_seen_state(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "app.log"
+    source.write_text("target event\n", encoding="utf-8")
+    monkeypatch.setenv("TRACECITE_MCP_STATE_DIR", str(tmp_path / "state"))
+
+    first = server.tracecite_search(str(source), "target", context_id="a")
+    second = server.tracecite_search(str(source), "target", context_id="b")
+
+    assert len(first["evidence"]) == 1
+    assert len(second["evidence"]) == 1
+
+
 def test_investigation_create_persists_state(tmp_path: Path) -> None:
     path = tmp_path / "investigation.json"
     state = server.tracecite_investigation_create(
@@ -59,6 +115,11 @@ def test_installed_mobile_extension_is_discovered_without_mcp_importing_mobile(m
     monkeypatch.delenv("TRACECITE_MCP_ALLOW_LIVE_SOURCE", raising=False)
     monkeypatch.delenv("TRACECITE_MCP_ALLOW_LIVE_ACTION", raising=False)
     monkeypatch.delenv("TRACECITE_MCP_AUTHORIZED_CAPABILITIES", raising=False)
+
+    extension_state = server.tracecite_list_extensions()
+    installed = {item["id"]: item for item in extension_state["extensions"]}
+    assert installed["mobile"]["protocol_version"] == "2"
+    assert "runtimes" not in extension_state
 
     capabilities = {item["name"]: item for item in server.tracecite_list_capabilities()}
     assert capabilities["mobile.environment.probe"]["safety"] == "read"

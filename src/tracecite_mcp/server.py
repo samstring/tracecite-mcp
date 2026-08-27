@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import os
+from pathlib import Path
 from typing import Any
 
 from mcp.server import MCPServer
@@ -19,7 +21,9 @@ from tracecite import (
     validate_finding,
     verify,
 )
-from tracecite.extension import available_runtimes, load_extensions, loaded_plugins
+from tracecite.extension import list_extensions, load_extensions, loaded_plugins
+from tracecite.integrations import ContextEngine, prefer_smaller_agent_view
+from tracecite.integrations.evidence_ledger import EvidenceLedger, expand_many
 
 
 mcp = MCPServer("TraceCite")
@@ -37,6 +41,19 @@ def _env_bool(name: str, default: bool = False) -> bool:
 def _authorized_capabilities() -> set[str]:
     raw = os.environ.get("TRACECITE_MCP_AUTHORIZED_CAPABILITIES", "")
     return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def _state_root() -> Path:
+    """Return the server-owner context root; models never choose this path."""
+
+    configured = os.environ.get("TRACECITE_MCP_STATE_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (Path.home() / ".tracecite" / "mcp").resolve()
+
+
+def _ledger() -> EvidenceLedger:
+    return EvidenceLedger(_state_root() / "ledger")
 
 
 def ensure_extensions_loaded() -> list[dict[str, Any]]:
@@ -119,9 +136,19 @@ def tracecite_search(
     investigation_path: str | None = None,
     hypothesis_id: str | None = None,
     test_id: str | None = None,
+    context_id: str | None = None,
 ) -> dict[str, Any]:
-    """Search a source and return immutable EvidencePointers when possible."""
-    return search(
+    """Search and optionally apply gain-aware per-context Evidence deltas.
+
+    Without ``context_id`` this returns the canonical Runtime Result exactly as
+    before. With ``context_id`` the canonical Result is retained in a private
+    content-addressed Ledger and seen-state always advances. The delta view is
+    returned only when it serializes smaller than the equivalent ordinary view;
+    otherwise MCP returns the ordinary view so Context optimization cannot make
+    a model turn more expensive merely because of its own metadata.
+    """
+
+    canonical = search(
         input_path,
         query,
         regex=regex,
@@ -132,6 +159,29 @@ def tracecite_search(
         hypothesis_id=hypothesis_id,
         test_id=test_id,
     )
+    if not context_id:
+        return canonical
+    if canonical.get("status") not in {"ok", "no_match"}:
+        return canonical
+
+    ledger = _ledger()
+    result_id = ledger.store(canonical)
+
+    baseline = copy.deepcopy(dict(canonical))
+    baseline_data = dict(baseline.get("data") or {})
+    baseline_data["result_id"] = result_id
+    baseline_data["recovery_tool"] = "tracecite_expand_many"
+    baseline["data"] = baseline_data
+
+    projected = ContextEngine(_state_root(), context_id).project_search(
+        canonical,
+        result_id=result_id,
+    )
+    data = dict(projected.get("data") or {})
+    data["result_id"] = result_id
+    data["recovery_tool"] = "tracecite_expand_many"
+    projected["data"] = data
+    return prefer_smaller_agent_view(projected, baseline)
 
 
 @mcp.tool()
@@ -152,6 +202,26 @@ def tracecite_expand(
         before=before,
         after=after,
         expected_sha256=expected_sha256,
+        max_chars=max_chars,
+    )
+
+
+@mcp.tool()
+def tracecite_expand_many(
+    result_id: str,
+    refs: list[str],
+    before: int = 3,
+    after: int = 3,
+    max_chars: int = 20000,
+) -> dict[str, Any]:
+    """Recover several immutable evidence refs from a stateful search Result."""
+
+    return expand_many(
+        _ledger(),
+        result_id,
+        refs,
+        before=before,
+        after=after,
         max_chars=max_chars,
     )
 
@@ -197,11 +267,11 @@ def tracecite_validate_finding(
 
 @mcp.tool()
 def tracecite_list_extensions() -> dict[str, Any]:
-    """List extension load results and currently available domain runtimes."""
+    """List declarative Extension v2 state without exposing Runtime internals."""
     ensure_extensions_loaded()
     return {
-        "extensions": list(_EXTENSION_LOAD_RESULT),
-        "runtimes": available_runtimes(),
+        "extensions": list_extensions(),
+        "load_results": list(_EXTENSION_LOAD_RESULT),
         "loaded_plugins": loaded_plugins(),
     }
 
