@@ -58,9 +58,11 @@ def test_stateful_search_returns_delta_and_expand_many_recovers_context(
     )
     assert first["status"] == "ok"
     assert len(first["evidence"]) == 1
-    assert first["data"]["context"]["new_evidence"] == 1
-    assert first["data"]["context"]["repeated_evidence"] == 0
+    # One tiny first-turn Evidence row is cheaper without Context metadata, so
+    # the public view may use the ordinary fallback. Seen-state must still be
+    # persisted because a later turn depends on it.
     assert first["data"]["recovery_tool"] == "tracecite_expand_many"
+    assert (state_dir / "_contexts" / "case-1.json").is_file()
     result_id = first["data"]["result_id"]
     ref = first["evidence"][0]["uri"].split("#", 1)[1]
 
@@ -74,6 +76,7 @@ def test_stateful_search_returns_delta_and_expand_many_recovers_context(
     assert second["outcome"] == "supported"
     assert second["evidence"] == []
     assert len(second["data"]["result_id"]) == 64
+    assert second["data"]["context"]["new_evidence"] == 0
     assert second["data"]["context"]["repeated_evidence"] == 1
 
     expanded = server.tracecite_expand_many(result_id, [f"#{ref}"], before=0, after=0)
