@@ -57,13 +57,36 @@ def test_installed_mobile_extension_is_discovered_without_mcp_importing_mobile(m
     monkeypatch.setattr(server, "_EXTENSIONS_LOADED", False)
     monkeypatch.setattr(server, "_EXTENSION_LOAD_RESULT", [])
     monkeypatch.delenv("TRACECITE_MCP_ALLOW_LIVE_SOURCE", raising=False)
+    monkeypatch.delenv("TRACECITE_MCP_ALLOW_LIVE_ACTION", raising=False)
+    monkeypatch.delenv("TRACECITE_MCP_AUTHORIZED_CAPABILITIES", raising=False)
 
     capabilities = {item["name"]: item for item in server.tracecite_list_capabilities()}
+    assert capabilities["mobile.environment.probe"]["safety"] == "read"
     assert capabilities["mobile.devices.list"]["safety"] == "live_source"
+    assert capabilities["mobile.processes.list"]["safety"] == "live_source"
     assert capabilities["mobile.sessions.list"]["safety"] == "live_source"
+
+    for name in ("mobile.sessions.start", "mobile.sessions.stop", "mobile.app.launch"):
+        assert capabilities[name]["safety"] == "live_action"
+        assert capabilities[name]["requires_authorization"] is True
 
     with pytest.raises(CapabilityError, match="allow_live_source"):
         server.tracecite_execute_capability("mobile.devices.list", {"platform": "ios"})
+
+    # This must fail at the Runtime gate before any device resolution or backend
+    # side effect can occur in CI.
+    with pytest.raises(CapabilityError, match="allow_live_action"):
+        server.tracecite_execute_capability(
+            "mobile.sessions.start",
+            {"platform": "ios", "device": "not-a-real-device"},
+        )
+
+    monkeypatch.setenv("TRACECITE_MCP_ALLOW_LIVE_ACTION", "1")
+    with pytest.raises(CapabilityError, match="authorization"):
+        server.tracecite_execute_capability(
+            "mobile.sessions.start",
+            {"platform": "ios", "device": "not-a-real-device"},
+        )
 
 
 def test_live_grants_are_server_policy_not_model_arguments(monkeypatch) -> None:
