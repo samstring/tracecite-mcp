@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import os
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from tracecite import (
     verify,
 )
 from tracecite.extension import list_extensions, load_extensions, loaded_plugins
-from tracecite.integrations import ContextEngine
+from tracecite.integrations import ContextEngine, prefer_smaller_agent_view
 from tracecite.integrations.evidence_ledger import EvidenceLedger, expand_many
 
 
@@ -137,12 +138,14 @@ def tracecite_search(
     test_id: str | None = None,
     context_id: str | None = None,
 ) -> dict[str, Any]:
-    """Search and optionally return only evidence new to one Agent context.
+    """Search and optionally apply gain-aware per-context Evidence deltas.
 
     Without ``context_id`` this returns the canonical Runtime Result exactly as
     before. With ``context_id`` the canonical Result is retained in a private
-    content-addressed Ledger and the response becomes a lossless delta over the
-    evidence already seen by that context.
+    content-addressed Ledger and seen-state always advances. The delta view is
+    returned only when it serializes smaller than the equivalent ordinary view;
+    otherwise MCP returns the ordinary view so Context optimization cannot make
+    a model turn more expensive merely because of its own metadata.
     """
 
     canonical = search(
@@ -163,6 +166,13 @@ def tracecite_search(
 
     ledger = _ledger()
     result_id = ledger.store(canonical)
+
+    baseline = copy.deepcopy(dict(canonical))
+    baseline_data = dict(baseline.get("data") or {})
+    baseline_data["result_id"] = result_id
+    baseline_data["recovery_tool"] = "tracecite_expand_many"
+    baseline["data"] = baseline_data
+
     projected = ContextEngine(_state_root(), context_id).project_search(
         canonical,
         result_id=result_id,
@@ -171,7 +181,7 @@ def tracecite_search(
     data["result_id"] = result_id
     data["recovery_tool"] = "tracecite_expand_many"
     projected["data"] = data
-    return projected
+    return prefer_smaller_agent_view(projected, baseline)
 
 
 @mcp.tool()
