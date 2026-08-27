@@ -53,6 +53,19 @@ def test_investigation_create_persists_state(tmp_path: Path) -> None:
     assert state["scope"] == {"platform": "ios"}
 
 
+def test_installed_mobile_extension_is_discovered_without_mcp_importing_mobile(monkeypatch) -> None:
+    monkeypatch.setattr(server, "_EXTENSIONS_LOADED", False)
+    monkeypatch.setattr(server, "_EXTENSION_LOAD_RESULT", [])
+    monkeypatch.delenv("TRACECITE_MCP_ALLOW_LIVE_SOURCE", raising=False)
+
+    capabilities = {item["name"]: item for item in server.tracecite_list_capabilities()}
+    assert capabilities["mobile.devices.list"]["safety"] == "live_source"
+    assert capabilities["mobile.sessions.list"]["safety"] == "live_source"
+
+    with pytest.raises(CapabilityError, match="allow_live_source"):
+        server.tracecite_execute_capability("mobile.devices.list", {"platform": "ios"})
+
+
 def test_live_grants_are_server_policy_not_model_arguments(monkeypatch) -> None:
     name = "test.live.collect"
     register_capability(
