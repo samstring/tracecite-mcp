@@ -45,7 +45,7 @@ def test_canonical_retrieve_projects_adaptive_core_contract(tmp_path: Path) -> N
     assert result["status"] == "ok"
     assert result["evidence"]
     assert result["evidence"][0]["uri"].startswith("evidence://sha256/")
-    assert result["data"]["routing"]["route"] in {"direct", "bounded", "investigate"}
+    assert result["data"]["routing"]["mode"] in {"direct", "bounded", "investigate"}
     assert "progress" in result["data"]
 
 
