@@ -11,13 +11,13 @@ Agent Host / Claude / Codex / Cursor
                  ↓
            tracecite-mcp
                  ↓
-        TraceCite public API
+      canonical retrieve + verify
                  ↓
       Investigation Runtime
           /             \
  Evidence Core     Capability Registry
                        ↓
-                   Extensions
+              Extension Protocol v2
                    ├─ mobile.*
                    ├─ ci.*
                    └─ third-party.*
@@ -37,13 +37,9 @@ Python 3.10+ is supported.
 
 ## Tools
 
-The first MCP surface intentionally stays small:
+The preferred Agent path is now Core's canonical adaptive retrieval contract:
 
-- `tracecite_probe`
-- `tracecite_sample`
-- `tracecite_survey`
-- `tracecite_search`
-- `tracecite_expand`
+- `tracecite_retrieve` — `target.kind=source|query|range`; Core owns adaptive routing, evidence novelty, coverage, signal hints, and stop reasons.
 - `tracecite_verify`
 - `tracecite_investigation_create`
 - `tracecite_validate_finding`
@@ -51,7 +47,9 @@ The first MCP surface intentionally stays small:
 - `tracecite_list_capabilities`
 - `tracecite_execute_capability`
 
-Domain abilities are not added as hard-coded MCP functions. Installed extensions register `CapabilitySpec` objects with TraceCite and the adapter exposes them through `list_capabilities` / `execute_capability`.
+The existing `tracecite_probe`, `tracecite_sample`, `tracecite_survey`, `tracecite_search`, and `tracecite_expand` tools remain compatibility/convenience wrappers. New Agent integrations should prefer `tracecite_retrieve` instead of building their own probe/search/expand exploration loop.
+
+Domain abilities are not added as hard-coded MCP functions. Installed Extension Protocol v2 packages declare capabilities with TraceCite and the adapter exposes them through `list_capabilities` / `execute_capability`.
 
 ## Safety
 
@@ -62,19 +60,20 @@ The model cannot pass `allow_live_source`, `allow_live_action`, or `authorized` 
 ```bash
 export TRACECITE_MCP_ALLOW_LIVE_SOURCE=1
 export TRACECITE_MCP_ALLOW_LIVE_ACTION=1
-export TRACECITE_MCP_AUTHORIZED_CAPABILITIES='mobile.ios.collect_logs,mobile.android.collect_logs'
+export TRACECITE_MCP_AUTHORIZED_CAPABILITIES='mobile.sessions.start,mobile.sessions.stop,mobile.app.launch'
 ```
 
 Use `*` in `TRACECITE_MCP_AUTHORIZED_CAPABILITIES` only when the host deliberately grants authorization to every capability that declares `requires_authorization=true`.
 
-Starting `tracecite-mcp` is the explicit extension-loading boundary. Installed `tracecite.extensions` entry points are loaded once when the MCP server starts.
+Starting `tracecite-mcp` is the explicit extension-loading boundary. Installed `tracecite.extensions` entry points are loaded once when the MCP server starts. `tracecite_list_extensions` returns both loader results and the installed v2 extension manifests.
 
 ## Development
 
-The `feature_for_agent` branch currently develops against the matching TraceCite Core feature branch because the Capability Registry has not yet been released as a newer PyPI version.
+The `feature_for_agent` branch develops against the matching Core and Mobile feature branches:
 
 ```bash
 python -m pip install 'git+https://github.com/samstring/tracecite-core.git@feature_for_agent'
+python -m pip install 'git+https://github.com/samstring/tracecite-mobile.git@feature_for_agent'
 python -m pip install -e '.[dev]'
 python -m pytest -q
 tracecite-mcp
@@ -94,15 +93,16 @@ The default transport is stdio.
 - [x] server-owned live/authorization gates
 - [x] Python 3.10–3.14 + macOS CI
 
-### Phase 2 — extension integration
+### Phase 2 — extension + canonical Agent API
 
-- [ ] register useful `mobile.*` capabilities in `tracecite-mobile`
-- [ ] integration test MCP + Mobile capability discovery
-- [ ] test live-source denial and explicit host grant end-to-end
+- [x] Mobile Extension Protocol v2 discovery
+- [x] MCP + Mobile capability integration test
+- [x] live-source denial and explicit host grant tests
+- [x] canonical adaptive `retrieve` projection
+- [x] preserve legacy evidence tools as compatibility wrappers
 
 ### Phase 3 — production hardening
 
 - [ ] privacy/redaction policy before freezing sensitive live evidence
-- [ ] bounded MCP transport/result projection for large AgentResult payloads
 - [ ] MCP Inspector / real-host acceptance tests
 - [ ] publish versioned compatibility matrix for TraceCite Core and MCP SDK

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Mapping
 
 from mcp.server import MCPServer
 
@@ -19,7 +19,19 @@ from tracecite import (
     validate_finding,
     verify,
 )
-from tracecite.extension import available_runtimes, load_extensions, loaded_plugins
+from tracecite.extension import (
+    available_runtimes,
+    list_extensions,
+    load_extensions,
+    loaded_plugins,
+)
+from tracecite.runtime import (
+    EvidenceRequest,
+    QueryTarget,
+    RangeTarget,
+    SourceTarget,
+    retrieve,
+)
 
 
 mcp = MCPServer("TraceCite")
@@ -48,6 +60,103 @@ def ensure_extensions_loaded() -> list[dict[str, Any]]:
     return list(_EXTENSION_LOAD_RESULT)
 
 
+def _required_text(target: Mapping[str, Any], key: str) -> str:
+    value = str(target.get(key) or "").strip()
+    if not value:
+        raise ValueError(f"retrieve target requires {key}")
+    return value
+
+
+def _optional_int(target: Mapping[str, Any], key: str) -> int | None:
+    value = target.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"retrieve target {key} must be an integer")
+    return value
+
+
+def _build_retrieve_target(target: Mapping[str, Any]):
+    if not isinstance(target, Mapping):
+        raise ValueError("target must be an object")
+    kind = str(target.get("kind") or "").strip().lower()
+    source = _required_text(target, "source") if kind in {"source", "query", "range"} else ""
+
+    if kind == "source":
+        recursive = target.get("recursive", False)
+        if not isinstance(recursive, bool):
+            raise ValueError("retrieve target recursive must be a boolean")
+        return SourceTarget(
+            source=source,
+            glob=str(target.get("glob") or "*"),
+            recursive=recursive,
+            segmenter=str(target.get("segmenter") or "auto"),
+        )
+
+    if kind == "query":
+        return QueryTarget(
+            source=source,
+            query=_required_text(target, "query"),
+            regex=bool(target.get("regex", False)),
+            snapshot=bool(target.get("snapshot", True)),
+            segmenter=str(target.get("segmenter") or "auto"),
+            last=str(target["last"]) if target.get("last") is not None else None,
+            since=str(target["since"]) if target.get("since") is not None else None,
+            until=str(target["until"]) if target.get("until") is not None else None,
+            fold=bool(target.get("fold", False)),
+            max_evidence=_optional_int(target, "max_evidence"),
+            max_line_chars=_optional_int(target, "max_line_chars"),
+        )
+
+    if kind == "range":
+        start_line = _optional_int(target, "start_line")
+        if start_line is None:
+            raise ValueError("retrieve target requires start_line")
+        return RangeTarget(
+            source=source,
+            start_line=start_line,
+            end_line=_optional_int(target, "end_line"),
+            before=int(target.get("before", 3)),
+            after=int(target.get("after", 3)),
+            expected_sha256=(
+                str(target["expected_sha256"]).strip()
+                if target.get("expected_sha256") is not None
+                else None
+            ),
+            max_chars=int(target.get("max_chars", 20_000)),
+        )
+
+    if kind == "provider":
+        raise ValueError(
+            "provider targets require process-local EvidenceProvider objects and "
+            "are not selectable through the generic MCP transport"
+        )
+    raise ValueError("retrieve target kind must be source, query, or range")
+
+
+@mcp.tool()
+def tracecite_retrieve(
+    target: dict[str, Any],
+    investigation_path: str | None = None,
+    hypothesis_id: str | None = None,
+    test_id: str | None = None,
+    cache: bool = True,
+) -> dict[str, Any]:
+    """Acquire evidence through Core's canonical adaptive retrieve contract.
+
+    ``target.kind`` is ``source``, ``query``, or ``range``. TraceCite Core owns
+    adaptive routing, evidence novelty, coverage, signal hints, and stop reasons.
+    """
+    request = EvidenceRequest(
+        target=_build_retrieve_target(target),
+        investigation_path=investigation_path,
+        hypothesis_id=hypothesis_id,
+        test_id=test_id,
+        cache=cache,
+    )
+    return retrieve(request).to_dict()
+
+
 @mcp.tool()
 def tracecite_probe(
     input_path: str,
@@ -58,7 +167,7 @@ def tracecite_probe(
     hypothesis_id: str | None = None,
     test_id: str | None = None,
 ) -> dict[str, Any]:
-    """Inspect source metadata, format and time coverage without diagnosing it."""
+    """Compatibility wrapper: inspect source metadata without adaptive routing."""
     return probe(
         input_path,
         glob=glob,
@@ -120,7 +229,7 @@ def tracecite_search(
     hypothesis_id: str | None = None,
     test_id: str | None = None,
 ) -> dict[str, Any]:
-    """Search a source and return immutable EvidencePointers when possible."""
+    """Compatibility wrapper: search without Core's adaptive retrieve routing."""
     return search(
         input_path,
         query,
@@ -144,7 +253,7 @@ def tracecite_expand(
     expected_sha256: str | None = None,
     max_chars: int = 20000,
 ) -> dict[str, Any]:
-    """Expand bounded context around a cited line range with hash checking."""
+    """Compatibility wrapper: expand one bounded cited range."""
     return expand(
         source_path,
         start_line,
@@ -197,10 +306,11 @@ def tracecite_validate_finding(
 
 @mcp.tool()
 def tracecite_list_extensions() -> dict[str, Any]:
-    """List extension load results and currently available domain runtimes."""
+    """List v2 extension manifests, load results, runtimes, and low-level plugins."""
     ensure_extensions_loaded()
     return {
         "extensions": list(_EXTENSION_LOAD_RESULT),
+        "installed_extensions": list_extensions(),
         "runtimes": available_runtimes(),
         "loaded_plugins": loaded_plugins(),
     }

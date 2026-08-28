@@ -14,6 +14,7 @@ def test_mcp_exposes_expected_thin_tool_surface() -> None:
     tools = asyncio.run(server.mcp.list_tools())
     names = {tool.name for tool in tools}
     assert {
+        "tracecite_retrieve",
         "tracecite_probe",
         "tracecite_sample",
         "tracecite_survey",
@@ -28,17 +29,38 @@ def test_mcp_exposes_expected_thin_tool_surface() -> None:
     } <= names
 
 
-def test_probe_and_search_use_real_tracecite_core(tmp_path: Path) -> None:
+def test_canonical_retrieve_projects_adaptive_core_contract(tmp_path: Path) -> None:
+    source = tmp_path / "app.log"
+    source.write_text("alpha\ntarget event\nomega\n", encoding="utf-8")
+
+    result = server.tracecite_retrieve(
+        {
+            "kind": "query",
+            "source": str(source),
+            "query": "target",
+            "segmenter": "rawtext",
+        }
+    )
+
+    assert result["status"] == "ok"
+    assert result["evidence"]
+    assert result["evidence"][0]["uri"].startswith("evidence://sha256/")
+    assert result["data"]["routing"]["route"] in {"direct", "bounded", "investigate"}
+    assert "progress" in result["data"]
+
+
+def test_probe_and_search_remain_compatibility_wrappers(tmp_path: Path) -> None:
     source = tmp_path / "app.log"
     source.write_text("alpha\ntarget event\nomega\n", encoding="utf-8")
 
     probed = server.tracecite_probe(str(source), segmenter="rawtext")
     searched = server.tracecite_search(str(source), "target", segmenter="rawtext")
 
+    assert probed["operation"] == "probe"
     assert probed["status"] == "ok"
+    assert searched["operation"] == "search"
     assert searched["status"] == "ok"
     assert searched["evidence"]
-    assert searched["evidence"][0]["uri"].startswith("evidence://sha256/")
 
 
 def test_investigation_create_persists_state(tmp_path: Path) -> None:
@@ -59,6 +81,10 @@ def test_installed_mobile_extension_is_discovered_without_mcp_importing_mobile(m
     monkeypatch.delenv("TRACECITE_MCP_ALLOW_LIVE_SOURCE", raising=False)
     monkeypatch.delenv("TRACECITE_MCP_ALLOW_LIVE_ACTION", raising=False)
     monkeypatch.delenv("TRACECITE_MCP_AUTHORIZED_CAPABILITIES", raising=False)
+
+    extension_state = server.tracecite_list_extensions()
+    installed = {item["id"]: item for item in extension_state["installed_extensions"]}
+    assert installed["mobile"]["protocol_version"] == "2"
 
     capabilities = {item["name"]: item for item in server.tracecite_list_capabilities()}
     assert capabilities["mobile.environment.probe"]["safety"] == "read"
