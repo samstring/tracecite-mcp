@@ -1,150 +1,176 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
+import hashlib
 from pathlib import Path
 
 import pytest
 
-from tracecite import CapabilityError, CapabilitySpec, register_capability
 from tracecite_mcp import server
 
 
-def test_mcp_exposes_expected_thin_tool_surface() -> None:
+EXPECTED_TOOLS = {
+    "tracecite_retrieve",
+    "tracecite_materialize",
+    "tracecite_replay",
+    "tracecite_aggregate",
+    "tracecite_traverse",
+    "tracecite_verify",
+}
+
+
+def _use_session_root(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    monkeypatch.setenv("TRACECITE_MCP_SESSION_ROOT", str(root))
+    monkeypatch.delenv("TRACECITE_MCP_SESSION_ID", raising=False)
+
+
+def test_mcp_exposes_only_canonical_evidence_runtime_tools() -> None:
     tools = asyncio.run(server.mcp.list_tools())
-    names = {tool.name for tool in tools}
-    assert {
-        "tracecite_retrieve",
-        "tracecite_probe",
-        "tracecite_sample",
-        "tracecite_survey",
-        "tracecite_search",
-        "tracecite_expand",
-        "tracecite_verify",
-        "tracecite_investigation_create",
-        "tracecite_validate_finding",
-        "tracecite_list_extensions",
-        "tracecite_list_capabilities",
-        "tracecite_execute_capability",
-    } <= names
+    assert {tool.name for tool in tools} == EXPECTED_TOOLS
 
 
-def test_canonical_retrieve_projects_adaptive_core_contract(tmp_path: Path) -> None:
+def test_retrieve_uses_persistent_retrieval_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_session_root(monkeypatch, tmp_path / "sessions")
     source = tmp_path / "app.log"
     source.write_text("alpha\ntarget event\nomega\n", encoding="utf-8")
+    target = {
+        "kind": "query",
+        "source": str(source),
+        "query": "target",
+        "segmenter": "rawtext",
+    }
 
-    result = server.tracecite_retrieve(
-        {
-            "kind": "query",
-            "source": str(source),
-            "query": "target",
-            "segmenter": "rawtext",
-        }
-    )
+    first = server.tracecite_retrieve(target, session_id="investigation-a")
+    repeated = server.tracecite_retrieve(target, session_id="investigation-a")
+    independent = server.tracecite_retrieve(target, session_id="investigation-b")
 
-    assert result["status"] == "ok"
-    assert result["evidence"]
-    assert result["evidence"][0]["uri"].startswith("evidence://sha256/")
-    assert result["data"]["routing"]["mode"] in {"direct", "bounded", "investigate"}
-    assert "progress" in result["data"]
+    assert first["status"] == "ok"
+    assert first["evidence"]
+    assert repeated["coverage"]["new_evidence"] == 0
+    assert repeated["coverage"]["repeated_evidence"] >= 1
+    assert independent["evidence"]
 
 
-def test_probe_and_search_remain_compatibility_wrappers(tmp_path: Path) -> None:
+def test_materialize_then_replay_preserves_novelty_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_session_root(monkeypatch, tmp_path / "sessions")
     source = tmp_path / "app.log"
     source.write_text("alpha\ntarget event\nomega\n", encoding="utf-8")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
 
-    probed = server.tracecite_probe(str(source), segmenter="rawtext")
-    searched = server.tracecite_search(str(source), "target", segmenter="rawtext")
-
-    assert probed["operation"] == "probe"
-    assert probed["status"] == "ok"
-    assert searched["operation"] == "search"
-    assert searched["status"] == "ok"
-    assert searched["evidence"]
-
-
-def test_investigation_create_persists_state(tmp_path: Path) -> None:
-    path = tmp_path / "investigation.json"
-    state = server.tracecite_investigation_create(
-        str(path),
-        "Why did the screen go blank?",
-        scope={"platform": "ios"},
+    materialized = server.tracecite_materialize(
+        str(source),
+        2,
+        before=0,
+        after=0,
+        expected_sha256=digest,
+        session_id="investigation-a",
     )
-    assert path.is_file()
-    assert state["problem"]["question"] == "Why did the screen go blank?"
-    assert state["scope"] == {"platform": "ios"}
+    replayed = server.tracecite_replay(
+        str(source),
+        2,
+        digest,
+        before=0,
+        after=0,
+        session_id="investigation-a",
+    )
+
+    assert materialized["evidence"]
+    assert replayed["operation"] == "replay"
+    assert replayed["coverage"]["new_evidence"] == 0
+    assert replayed["data"]["novelty"]["state"] == "replay"
 
 
-def test_installed_mobile_extension_is_discovered_without_mcp_importing_mobile(monkeypatch) -> None:
-    monkeypatch.setattr(server, "_EXTENSIONS_LOADED", False)
-    monkeypatch.setattr(server, "_EXTENSION_LOAD_RESULT", [])
-    monkeypatch.delenv("TRACECITE_MCP_ALLOW_LIVE_SOURCE", raising=False)
-    monkeypatch.delenv("TRACECITE_MCP_ALLOW_LIVE_ACTION", raising=False)
-    monkeypatch.delenv("TRACECITE_MCP_AUTHORIZED_CAPABILITIES", raising=False)
+def test_replay_requires_prior_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_session_root(monkeypatch, tmp_path / "sessions")
+    source = tmp_path / "app.log"
+    source.write_text("alpha\ntarget event\nomega\n", encoding="utf-8")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
 
-    extension_state = server.tracecite_list_extensions()
-    installed = {item["id"]: item for item in extension_state["installed_extensions"]}
-    assert installed["mobile"]["protocol_version"] == "2"
-
-    capabilities = {item["name"]: item for item in server.tracecite_list_capabilities()}
-    assert capabilities["mobile.environment.probe"]["safety"] == "read"
-    assert capabilities["mobile.devices.list"]["safety"] == "live_source"
-    assert capabilities["mobile.processes.list"]["safety"] == "live_source"
-    assert capabilities["mobile.sessions.list"]["safety"] == "live_source"
-
-    for name in ("mobile.sessions.start", "mobile.sessions.stop", "mobile.app.launch"):
-        assert capabilities[name]["safety"] == "live_action"
-        assert capabilities[name]["requires_authorization"] is True
-
-    with pytest.raises(CapabilityError, match="allow_live_source"):
-        server.tracecite_execute_capability("mobile.devices.list", {"platform": "ios"})
-
-    # This must fail at the Runtime gate before any device resolution or backend
-    # side effect can occur in CI.
-    with pytest.raises(CapabilityError, match="allow_live_action"):
-        server.tracecite_execute_capability(
-            "mobile.sessions.start",
-            {"platform": "ios", "device": "not-a-real-device"},
-        )
-
-    monkeypatch.setenv("TRACECITE_MCP_ALLOW_LIVE_ACTION", "1")
-    with pytest.raises(CapabilityError, match="authorization"):
-        server.tracecite_execute_capability(
-            "mobile.sessions.start",
-            {"platform": "ios", "device": "not-a-real-device"},
+    with pytest.raises(ValueError, match="has not been materialized"):
+        server.tracecite_replay(
+            str(source),
+            2,
+            digest,
+            before=0,
+            after=0,
+            session_id="fresh-session",
         )
 
 
-def test_live_grants_are_server_policy_not_model_arguments(monkeypatch) -> None:
-    name = "test.live.collect"
-    register_capability(
-        CapabilitySpec(
-            name=name,
-            kind="action",
-            description="Synthetic live source",
-            safety="live_source",
-            requires_authorization=True,
-        ),
-        lambda args: {"ok": True, "args": args},
-        replace=True,
+def test_aggregate_is_mechanical_and_stateless(tmp_path: Path) -> None:
+    source = tmp_path / "app.log"
+    source.write_text("error A\nok\nerror B\nerror A\n", encoding="utf-8")
+
+    result = server.tracecite_aggregate(str(source), "error", operation="count")
+
+    assert result["operation"] == "aggregate"
+    assert result["data"]["count"] == 3
+    assert result["coverage"]["complete"] is True
+
+
+def test_traverse_accepts_serialized_provider_snapshot() -> None:
+    provider = {
+        "name": "fixture",
+        "evidence": [
+            {
+                "id": "e1",
+                "kind": "log",
+                "source": "runtime.log",
+                "label": "request started",
+                "entities": [{"kind": "request", "value": "7"}],
+            },
+            {
+                "id": "e2",
+                "kind": "log",
+                "source": "runtime.log",
+                "label": "request failed",
+                "entities": [{"kind": "request", "value": "7"}],
+            },
+        ],
+    }
+
+    result = server.tracecite_traverse(provider, seed_evidence_ids=["e1"])
+
+    assert result["status"] in {"ok", "partial"}
+    assert result["graph"]["nodes"] >= 1
+    assert "progress" in result
+
+
+def test_retrieve_range_is_not_a_compatibility_backdoor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_session_root(monkeypatch, tmp_path / "sessions")
+    source = tmp_path / "app.log"
+    source.write_text("alpha\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="tracecite_materialize"):
+        server.tracecite_retrieve(
+            {"kind": "range", "source": str(source), "start_line": 1},
+            session_id="investigation-a",
+        )
+
+
+def test_verify_is_a_thin_core_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        server,
+        "verify",
+        lambda path: {"operation": "verify", "status": "ok", "path": str(path)},
     )
-    monkeypatch.setattr(server, "_EXTENSIONS_LOADED", True)
-    monkeypatch.setattr(server, "_EXTENSION_LOAD_RESULT", [])
-    monkeypatch.delenv("TRACECITE_MCP_ALLOW_LIVE_SOURCE", raising=False)
-    monkeypatch.delenv("TRACECITE_MCP_AUTHORIZED_CAPABILITIES", raising=False)
 
-    signature = inspect.signature(server.tracecite_execute_capability)
-    assert "allow_live_source" not in signature.parameters
-    assert "allow_live_action" not in signature.parameters
-    assert "authorized" not in signature.parameters
+    result = server.tracecite_verify("manifest.json")
 
-    with pytest.raises(CapabilityError, match="allow_live_source"):
-        server.tracecite_execute_capability(name, {"device": "A"})
-
-    monkeypatch.setenv("TRACECITE_MCP_ALLOW_LIVE_SOURCE", "1")
-    with pytest.raises(CapabilityError, match="authorization"):
-        server.tracecite_execute_capability(name, {"device": "A"})
-
-    monkeypatch.setenv("TRACECITE_MCP_AUTHORIZED_CAPABILITIES", name)
-    result = server.tracecite_execute_capability(name, {"device": "A"})
-    assert result == {"ok": True, "args": {"device": "A"}}
+    assert result == {
+        "operation": "verify",
+        "status": "ok",
+        "path": "manifest.json",
+    }

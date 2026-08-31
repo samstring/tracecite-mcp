@@ -34,8 +34,6 @@ jobs:
         run: python -m pip install --upgrade pip setuptools wheel
       - name: Install TraceCite Core feature branch
         run: python -m pip install "git+https://github.com/samstring/tracecite-core.git@feature_for_agent"
-      - name: Install TraceCite Mobile feature branch
-        run: python -m pip install "git+https://github.com/samstring/tracecite-mobile.git@feature_for_agent"
       - name: Install MCP package and test dependencies
         run: python -m pip install -e ".[dev]"
       - name: Run tests

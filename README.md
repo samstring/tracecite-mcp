@@ -1,79 +1,135 @@
 # TraceCite MCP
 
-Thin Model Context Protocol adapter for TraceCite.
+Thin Model Context Protocol projection of TraceCite's canonical Evidence Runtime.
 
-TraceCite MCP does not implement a second investigation runtime and does not hard-code Mobile, CI, OTel, or other domain packages. It projects TraceCite's public Agent-facing API and Capability Registry to MCP hosts.
+TraceCite MCP is intentionally **not** a second Agent. It does not choose hypotheses, investigation order, causal explanations, evidence sufficiency, or when an Agent should stop. It exposes deterministic evidence mechanics and keeps Agent reasoning outside the server.
 
 ## Architecture
 
 ```text
-Agent Host / Claude / Codex / Cursor
-                 ↓
-           tracecite-mcp
-                 ↓
-      canonical retrieve + verify
-                 ↓
-      Investigation Runtime
-          /             \
- Evidence Core     Capability Registry
-                       ↓
-              Extension Protocol v2
-                   ├─ mobile.*
-                   ├─ ci.*
-                   └─ third-party.*
+Agent / Claude / Codex / Cursor / other MCP host
+                    │
+                    │ MCP tools
+                    ▼
+┌────────────────────────────────────────────┐
+│               tracecite-mcp                │
+│                                            │
+│  retrieve      materialize      replay     │
+│  aggregate     traverse         verify     │
+│                                            │
+│  session_id -> RetrievalSessionStore       │
+└──────────────────────┬─────────────────────┘
+                       │ public canonical API
+                       ▼
+┌────────────────────────────────────────────┐
+│              tracecite-core                │
+│                                            │
+│ provenance / source identity / coverage    │
+│ novelty / repeated evidence / replay       │
+│ bounded retrieval / deterministic traversal│
+└────────────────────────────────────────────┘
 ```
 
-The adapter follows the TraceCite rule: **constrain conclusions, not exploration**.
+The boundary is simple:
 
-## MCP SDK
+> **Agent owns thinking and decisions. TraceCite owns evidence mechanics.**
 
-This branch targets the current stable v2 line of the official MCP Python SDK:
+## Canonical tools
 
-```python
-from mcp.server import MCPServer
+The MCP surface intentionally contains exactly six TraceCite Evidence Runtime tools:
+
+| MCP tool | Core primitive | Responsibility |
+|---|---|---|
+| `tracecite_retrieve` | `retrieve` | caller-selected source/query retrieval with provenance, coverage and session novelty |
+| `tracecite_materialize` | `materialize` | exact bounded caller-selected source context |
+| `tracecite_replay` | `replay` | exact reread of already-covered immutable evidence without creating new novelty |
+| `tracecite_aggregate` | `aggregate` | deterministic `count` / `distinct` / `group` over caller-selected local text |
+| `tracecite_traverse` | `traverse` | bounded deterministic traversal from caller-selected evidence IDs/entities |
+| `tracecite_verify` | `verify` | mechanical manifest/integrity verification |
+
+The server does **not** expose compatibility wrappers such as `probe`, `sample`, `survey`, `search`, or `expand`. It also does not project Investigation/Finding semantics or Extension Capability Registry actions into this generic MCP surface. Those are separate secondary concerns and must not redefine the canonical Evidence contract.
+
+## Retrieval sessions
+
+`retrieve`, `materialize`, and `replay` accept a `session_id`.
+
+The MCP server maps that ID to Core's canonical `RetrievalSessionStore`. A session may remember only mechanical evidence state such as:
+
+- previously delivered Evidence identities;
+- covered immutable ranges;
+- repeated-evidence accounting;
+- request fingerprints;
+- bounded recent retrieval operations;
+- replay history.
+
+It does not remember or infer:
+
+- hypotheses;
+- root cause;
+- causal confidence;
+- evidence sufficiency;
+- stopping decisions.
+
+Use one stable `session_id` for one Agent investigation. Different IDs have independent evidence novelty state.
+
+By default, session files are stored under:
+
+```text
+~/.tracecite/mcp/_retrieval_sessions/
 ```
 
-Python 3.10+ is supported.
-
-## Tools
-
-The preferred Agent path is now Core's canonical adaptive retrieval contract:
-
-- `tracecite_retrieve` — `target.kind=source|query|range`; Core owns adaptive routing, evidence novelty, coverage, signal hints, and stop reasons.
-- `tracecite_verify`
-- `tracecite_investigation_create`
-- `tracecite_validate_finding`
-- `tracecite_list_extensions`
-- `tracecite_list_capabilities`
-- `tracecite_execute_capability`
-
-The existing `tracecite_probe`, `tracecite_sample`, `tracecite_survey`, `tracecite_search`, and `tracecite_expand` tools remain compatibility/convenience wrappers. New Agent integrations should prefer `tracecite_retrieve` instead of building their own probe/search/expand exploration loop.
-
-Domain abilities are not added as hard-coded MCP functions. Installed Extension Protocol v2 packages declare capabilities with TraceCite and the adapter exposes them through `list_capabilities` / `execute_capability`.
-
-## Safety
-
-Live execution is denied by default.
-
-The model cannot pass `allow_live_source`, `allow_live_action`, or `authorized` as MCP tool arguments. These are server-owner policy controls:
+The server owner can override the root:
 
 ```bash
-export TRACECITE_MCP_ALLOW_LIVE_SOURCE=1
-export TRACECITE_MCP_ALLOW_LIVE_ACTION=1
-export TRACECITE_MCP_AUTHORIZED_CAPABILITIES='mobile.sessions.start,mobile.sessions.stop,mobile.app.launch'
+export TRACECITE_MCP_SESSION_ROOT=/path/to/session-root
 ```
 
-Use `*` in `TRACECITE_MCP_AUTHORIZED_CAPABILITIES` only when the host deliberately grants authorization to every capability that declares `requires_authorization=true`.
+A host may also provide a default session ID:
 
-Starting `tracecite-mcp` is the explicit extension-loading boundary. Installed `tracecite.extensions` entry points are loaded once when the MCP server starts. `tracecite_list_extensions` returns both loader results and the installed v2 extension manifests.
+```bash
+export TRACECITE_MCP_SESSION_ID=my-investigation
+```
+
+Explicit tool arguments take precedence.
+
+## Tool semantics
+
+### `tracecite_retrieve`
+
+The Agent supplies `target.kind=source|query` and chooses the source/query. Range access is deliberately separate through `tracecite_materialize`.
+
+A hit is an observation, not proof of causality. `no_match` is a retrieval result, not proof that an event never occurred. `new_evidence=0` means no new Evidence identity was exposed in that RetrievalSession; it does not mean the investigation is complete.
+
+### `tracecite_materialize`
+
+The Agent selects the exact source and line/range. Immutable `expected_sha256` should be supplied when exact source identity matters.
+
+### `tracecite_replay`
+
+Replay requires the immutable SHA-256 and the requested range must already be covered in the same RetrievalSession. Replay returns the old evidence body intentionally while keeping novelty at zero.
+
+### `tracecite_aggregate`
+
+Aggregation is mechanical only. A dominant count/group is not automatically important or causal.
+
+### `tracecite_traverse`
+
+MCP cannot transport process-local Python provider objects directly, so the generic tool accepts a serialized provider snapshot with `name`, `evidence[]`, and optional `relations[]`. The Agent supplies `seed_evidence_ids` and/or `seed_entities` plus explicit traversal limits. The server does not select a next-best entity or investigation direction.
+
+### `tracecite_verify`
+
+Verification proves mechanical integrity/manifest facts. It does not validate an Agent's causal conclusion merely because an evidence artifact is intact.
+
+## Agent skill
+
+`skills/tracecite/SKILL.md` contains an Agent-neutral usage contract for these six MCP tools. Hosts may adapt the packaging to their own skill system, but the semantic content should remain shared rather than maintaining Pi/Codex/Claude-specific investigation rules.
 
 ## Development
 
-The `feature_for_agent` branch develops against the matching Core and Mobile feature branches:
+The `feature_for_agent` branch develops against the matching TraceCite Core branch:
 
 ```bash
 python -m pip install 'git+https://github.com/samstring/tracecite-core.git@feature_for_agent'
-python -m pip install 'git+https://github.com/samstring/tracecite-mobile.git@feature_for_agent'
 python -m pip install -e '.[dev]'
 python -m pytest -q
 tracecite-mcp
@@ -81,28 +137,10 @@ tracecite-mcp
 
 The default transport is stdio.
 
-## Implementation plan
+## Design guardrails
 
-### Phase 1 — foundation
-
-- [x] package scaffold
-- [x] MCP Python SDK v2 server
-- [x] deterministic TraceCite evidence tools
-- [x] Investigation creation and Finding validation
-- [x] Capability Registry projection
-- [x] server-owned live/authorization gates
-- [x] Python 3.10–3.14 + macOS CI
-
-### Phase 2 — extension + canonical Agent API
-
-- [x] Mobile Extension Protocol v2 discovery
-- [x] MCP + Mobile capability integration test
-- [x] live-source denial and explicit host grant tests
-- [x] canonical adaptive `retrieve` projection
-- [x] preserve legacy evidence tools as compatibility wrappers
-
-### Phase 3 — production hardening
-
-- [ ] privacy/redaction policy before freezing sensitive live evidence
-- [ ] MCP Inspector / real-host acceptance tests
-- [ ] publish versioned compatibility matrix for TraceCite Core and MCP SDK
+1. MCP maps tools; it does not implement a second Evidence Runtime.
+2. Session memory remains Core-owned `RetrievalSessionStore` state.
+3. MCP may expose mechanical telemetry, but must not turn it into root-cause or stop advice.
+4. No benchmark-specific investigation hints belong in tool descriptions or skills.
+5. New domain integrations should compose around the canonical six primitives rather than add competing evidence semantics.
