@@ -53,9 +53,12 @@ class Handler(BaseHTTPRequestHandler):
             self._done()
             return
 
+        # pi-mcp-adapter namespaces each remote MCP tool as <server>_<tool>
+        # inside its generic `mcp` proxy. TraceCite itself keeps the canonical
+        # `tracecite_*` MCP names; this extra prefix belongs only to the Pi adapter.
         arguments: dict[str, Any] = {
             "server": "tracecite",
-            "tool": "tracecite_retrieve",
+            "tool": "tracecite_tracecite_retrieve",
             "args": {
                 "session_id": "pi-host-smoke",
                 "target": {
