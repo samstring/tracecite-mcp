@@ -129,23 +129,38 @@ tracecite-core
 
 ### Pi Agent
 
-Pi does not provide the same native MCP client surface, so the Host smoke installs `pi-mcp-adapter` and uses a standard project `.mcp.json`. A deterministic local OpenAI-compatible fake model drives a real Pi Agent tool-call loop, causing Pi to invoke the adapter, call `tracecite_retrieve`, receive TraceCite evidence, and send the tool result back into the Agent loop.
+Pi does not provide the same native MCP client surface, so the Host smoke installs `pi-mcp-adapter`. The shared project `.mcp.json` contains only the TraceCite stdio server definition. A Pi-specific `.pi/mcp.json` override enables `directTools`, sets `toolPrefix` to `none`, and disables the generic proxy once the direct tools are available.
 
-The successful path is:
+This makes the Pi Agent-visible surface the same six canonical names as every other Host:
+
+```text
+tracecite_retrieve
+tracecite_materialize
+tracecite_replay
+tracecite_aggregate
+tracecite_traverse
+tracecite_verify
+```
+
+A deterministic local OpenAI-compatible fake model drives a real Pi Agent tool-call loop. The first model request is required to advertise exactly those six direct tools; the model calls `tracecite_retrieve` directly, the adapter routes it over MCP, TraceCite returns evidence, and Pi sends the real `role=tool` result back into the Agent loop.
+
+The preferred Pi path is therefore:
 
 ```text
 Pi Agent
-   ↓ Pi tool call
-pi-mcp-adapter
+   ↓ canonical direct tool call
+pi-mcp-adapter directTools
    ↓ standard .mcp.json / MCP
 tracecite-mcp
    ↓ public API
 tracecite-core
 ```
 
-`pi-mcp-adapter` internally namespaces remote MCP tools as `<server>_<tool>`. With a server named `tracecite`, the canonical MCP tool `tracecite_retrieve` therefore appears inside that adapter's generic `mcp` proxy as `tracecite_tracecite_retrieve`. This is an adapter-specific routing name only. TraceCite's public MCP tool remains `tracecite_retrieve`; the product API is not renamed to accommodate Pi.
+This direct mode is preferred for the controlled Pi benchmark because TraceCite has only six targeted tools. It avoids the extra discovery/proxy turn and preserves the same canonical Agent-visible tool names used by the previous Pi integration and by other MCP Hosts.
 
-The Host workflow reached green for both Codex and Pi on 2026-08-31. The ordinary MCP unit/stdio/build matrix remained green at the same HEAD.
+For completeness, the adapter's default proxy mode internally namespaces remote tools as `<server>_<tool>`, so a server named `tracecite` plus MCP tool `tracecite_retrieve` appears there as `tracecite_tracecite_retrieve`. That is an adapter-only routing name and is not the preferred benchmark surface. TraceCite's public MCP tool remains `tracecite_retrieve`.
+
+The direct-tools Host workflow reached green for both Codex and Pi in run `33379963339` on 2026-08-31. The ordinary MCP unit/stdio/build matrix also remained green.
 
 ## What is deliberately not implemented here
 
