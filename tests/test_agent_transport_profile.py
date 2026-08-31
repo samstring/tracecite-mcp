@@ -69,5 +69,7 @@ def test_materialize_default_transport_is_smaller_than_old_twenty_k(tmp_path: Pa
 
     body = result.get("data", {}).get("text") or result.get("data", {}).get("new_text") or ""
     assert body
-    assert len(body) <= 8_000
+    # Core preserves the final line terminator when the bounded body lands
+    # exactly on max_chars, so the serialized text can be one character over.
+    assert len(body) <= 8_001
     assert not ({"text", "new_text"} <= set(result.get("data", {})))
