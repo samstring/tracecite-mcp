@@ -1,0 +1,202 @@
+name: Agent Host MCP Smoke
+
+on:
+  push:
+    branches: [feature_for_agent]
+  pull_request:
+    branches: [feature_for_agent]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codex-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install TraceCite and Codex CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install "git+https://github.com/samstring/tracecite-core.git@feature_for_agent"
+          python -m pip install -e ".[dev]"
+          npm install -g @openai/codex@0.151.0
+          codex --version
+
+      - name: Configure TraceCite MCP in Codex
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/codex-tracecite-smoke"
+          CODEX_HOME="$RUNNER_TEMP/codex-home"
+          mkdir -p "$WORK" "$CODEX_HOME"
+          printf 'alpha\ntarget event\nomega\n' > "$WORK/app.log"
+          cat > "$CODEX_HOME/config.toml" <<EOF
+          model = "mock-model"
+          model_provider = "smoke"
+
+          [model_providers.smoke]
+          name = "Smoke"
+          base_url = "http://127.0.0.1:9/v1"
+          wire_api = "responses"
+          EOF
+          export CODEX_HOME
+          codex mcp add tracecite \
+            --env "TRACECITE_MCP_ALLOWED_ROOTS=$WORK" \
+            --env "TRACECITE_MCP_STATE_DIR=$WORK/state" \
+            -- python -m tracecite_mcp.server
+          codex mcp get tracecite --json
+          echo "CODEX_HOME=$CODEX_HOME" >> "$GITHUB_ENV"
+          echo "CODEX_SMOKE_WORK=$WORK" >> "$GITHUB_ENV"
+
+      - name: Run Codex app-server MCP tool smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/codex_app_server_smoke.py "$CODEX_SMOKE_WORK"
+
+  pi-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install TraceCite, Pi, and Pi MCP adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install "git+https://github.com/samstring/tracecite-core.git@feature_for_agent"
+          python -m pip install -e ".[dev]"
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
+          pi --version
+          export PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi-agent"
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          pi install npm:pi-mcp-adapter@2.27.0 --approve
+          pi list
+          echo "PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR" >> "$GITHUB_ENV"
+
+      - name: Run Pi Agent through standard MCP config
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/pi-tracecite-smoke"
+          PORT_FILE="$RUNNER_TEMP/pi-fake-openai.port"
+          REQUEST_LOG="$RUNNER_TEMP/pi-fake-openai.requests.jsonl"
+          EVENTS="$RUNNER_TEMP/pi-host-events.jsonl"
+          mkdir -p "$WORK"
+          printf 'alpha\ntarget event\nomega\n' > "$WORK/app.log"
+
+          cat > "$WORK/.mcp.json" <<EOF
+          {
+            "mcpServers": {
+              "tracecite": {
+                "command": "python",
+                "args": ["-m", "tracecite_mcp.server"],
+                "env": {
+                  "TRACECITE_MCP_ALLOWED_ROOTS": "$WORK",
+                  "TRACECITE_MCP_STATE_DIR": "$WORK/state"
+                }
+              }
+            }
+          }
+          EOF
+
+          python scripts/pi_fake_openai_server.py "$WORK/app.log" "$PORT_FILE" "$REQUEST_LOG" &
+          FAKE_PID=$!
+          trap 'kill "$FAKE_PID" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 100); do
+            [[ -s "$PORT_FILE" ]] && break
+            sleep 0.1
+          done
+          test -s "$PORT_FILE"
+          PORT="$(cat "$PORT_FILE")"
+
+          python - "$PI_CODING_AGENT_DIR/models.json" "$PORT" <<'PY'
+          import json, sys
+          from pathlib import Path
+          out = Path(sys.argv[1])
+          port = sys.argv[2]
+          payload = {
+              "providers": {
+                  "smoke": {
+                      "name": "Smoke",
+                      "baseUrl": f"http://127.0.0.1:{port}/v1",
+                      "api": "openai-completions",
+                      "compat": {
+                          "supportsDeveloperRole": False,
+                          "supportsReasoningEffort": False,
+                          "supportsUsageInStreaming": False,
+                      },
+                      "models": [
+                          {
+                              "id": "smoke-model",
+                              "name": "Smoke Model",
+                              "reasoning": False,
+                              "input": ["text"],
+                              "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                              "contextWindow": 100000,
+                              "maxTokens": 4096,
+                          }
+                      ],
+                  }
+              }
+          }
+          out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+          cd "$WORK"
+          pi \
+            --provider smoke --model smoke-model --api-key smoke \
+            --thinking off --mode json --no-session --approve \
+            --tools mcp \
+            --no-skills --no-prompt-templates --no-context-files \
+            "Use the MCP tool to retrieve the line containing target from app.log, then finish." \
+            > "$EVENTS"
+
+          python - "$EVENTS" "$REQUEST_LOG" <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          events = Path(sys.argv[1]).read_text(encoding="utf-8")
+          requests = [json.loads(line) for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines() if line.strip()]
+          if "PI_MCP_SMOKE_OK" not in events:
+              raise SystemExit("Pi did not complete the fake-model tool loop")
+          if "target event" not in events:
+              raise SystemExit("Pi transcript did not contain TraceCite evidence")
+          if len(requests) < 2:
+              raise SystemExit(f"expected at least two model requests, got {len(requests)}")
+          advertised = {
+              ((tool.get("function") or {}).get("name"))
+              for tool in (requests[0].get("tools") or [])
+              if isinstance(tool, dict)
+          }
+          if "mcp" not in advertised:
+              raise SystemExit(f"Pi MCP proxy tool was not advertised: {advertised}")
+          if not any(
+              isinstance(message, dict) and message.get("role") == "tool"
+              for message in (requests[-1].get("messages") or [])
+          ):
+              raise SystemExit("Pi did not send the MCP tool result back to the model")
+          print(json.dumps({"host": "pi", "status": "ok", "model_requests": len(requests)}, sort_keys=True))
+          PY
