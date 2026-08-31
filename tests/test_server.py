@@ -35,6 +35,34 @@ def test_mcp_exposes_only_canonical_evidence_runtime_tools() -> None:
     assert {tool.name for tool in tools} == EXPECTED_TOOLS
 
 
+def test_mcp_tool_descriptions_explain_usage_and_result_boundaries() -> None:
+    tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+
+    retrieve = tools["tracecite_retrieve"].description or ""
+    assert 'target.kind' in retrieve
+    assert 'tracecite_materialize' in retrieve
+    assert 'new_evidence=0' in retrieve
+    assert 'causal' in retrieve
+
+    materialize = tools["tracecite_materialize"].description or ""
+    assert 'expected_sha256' in materialize
+    assert 'immutable source version' in materialize
+
+    replay = tools["tracecite_replay"].description or ""
+    assert 'new_evidence=0' in replay
+    assert 'not newly discovered support' in replay
+
+    aggregate = tools["tracecite_aggregate"].description or ""
+    assert 'frequency/dominance is not causal' in aggregate
+
+    traverse = tools["tracecite_traverse"].description or ""
+    assert 'mechanical end' in traverse
+    assert 'not proof' in traverse
+
+    verify = tools["tracecite_verify"].description or ""
+    assert 'does not validate a hypothesis' in verify
+
+
 def test_retrieve_uses_persistent_core_retrieval_session(tmp_path: Path) -> None:
     source = tmp_path / "app.log"
     source.write_text("alpha\ntarget event\nomega\n", encoding="utf-8")
@@ -196,6 +224,38 @@ def test_retrieve_range_is_not_a_compatibility_backdoor(tmp_path: Path) -> None:
             "investigation-a",
             {"kind": "range", "source": str(source), "start_line": 1},
         )
+
+
+def test_retrieve_old_read_style_gets_actionable_materialize_error(tmp_path: Path) -> None:
+    source = tmp_path / "app.log"
+    source.write_text("alpha\n", encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc:
+        server.tracecite_retrieve(
+            "investigation-a",
+            {"source": str(source), "start_line": 1, "line_count": 100},
+        )
+
+    message = str(exc.value)
+    assert "tracecite_materialize" in message
+    assert "start_line" in message
+    assert "line_count" in message
+
+
+def test_retrieve_missing_kind_explains_valid_kinds_and_range_tool(tmp_path: Path) -> None:
+    source = tmp_path / "app.log"
+    source.write_text("alpha\n", encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc:
+        server.tracecite_retrieve(
+            "investigation-a",
+            {"source": str(source), "query": "alpha"},
+        )
+
+    message = str(exc.value)
+    assert "target.kind" in message
+    assert "'query', 'source', or 'provider'" in message
+    assert "tracecite_materialize" in message
 
 
 def test_verify_is_thin_core_passthrough(
