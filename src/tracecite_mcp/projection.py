@@ -1,10 +1,11 @@
 """Agent-facing mechanical response projection for TraceCite MCP.
 
 The Core result remains authoritative.  This module only removes redundant or
-bulky transport fields from evidence-bearing responses while preserving the
-facts an Agent needs to continue an investigation: provenance, immutable source
-identity, exact materialized text, coverage, RetrievalSession state, and
-mechanical novelty.  It must never infer hypotheses, sufficiency, or stopping.
+bulky transport fields while preserving the facts an Agent needs to continue an
+investigation: provenance, immutable source identity, exact materialized text,
+coverage, RetrievalSession state, mechanical novelty, aggregate/traversal
+results, and integrity facts.  It must never infer hypotheses, sufficiency, or
+stopping.
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ def _compact_evidence(row: Any) -> Any:
         projected["preview"] = str(preview)[:_PREVIEW_CHARS]
 
     # Provider identities are mechanical evidence facts and may be needed as
-    # caller-selected traversal seeds.  Preserve them even when other provider
+    # caller-selected traversal seeds. Preserve them even when other provider
     # metadata is omitted from the transport projection.
     _copy_present(row, projected, "entities")
     return projected
@@ -128,18 +129,7 @@ def _compact_data(operation: str, value: Any) -> Any:
     return projected
 
 
-def compact_response(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the canonical compact MCP transport projection.
-
-    Only evidence-bearing retrieval/materialization/replay responses are pruned.
-    Aggregate/traverse/verify payloads are already bounded mechanical results, so
-    they pass through unchanged.  No semantic judgment is introduced here.
-    """
-
-    operation = str(payload.get("operation") or "")
-    if operation not in {"retrieve", "materialize", "replay"}:
-        return dict(payload)
-
+def _compact_retrieval(payload: Mapping[str, Any], operation: str) -> dict[str, Any]:
     projected: dict[str, Any] = {}
     _copy_present(
         payload,
@@ -174,5 +164,66 @@ def compact_response(payload: Mapping[str, Any]) -> dict[str, Any]:
         data = _compact_data(operation, payload.get("data"))
         if data:
             projected["data"] = data
-
     return projected
+
+
+def _compact_bounded(payload: Mapping[str, Any], *keys: str) -> dict[str, Any]:
+    projected: dict[str, Any] = {}
+    _copy_present(payload, projected, *keys)
+    return projected
+
+
+def compact_response(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the canonical compact MCP transport projection.
+
+    Projection is intentionally operation-specific and mechanical. Exact
+    materialized text is never truncated. No planner, causal, sufficiency, or
+    stopping fields are synthesized.
+    """
+
+    operation = str(payload.get("operation") or "")
+    if operation in {"retrieve", "materialize", "replay"}:
+        return _compact_retrieval(payload, operation)
+    if operation == "aggregate":
+        return _compact_bounded(
+            payload,
+            "operation",
+            "status",
+            "source",
+            "source_sha256",
+            "sha256",
+            "query",
+            "regex",
+            "aggregate",
+            "data",
+            "coverage",
+            "error",
+        )
+    if operation == "traverse":
+        return _compact_bounded(
+            payload,
+            "operation",
+            "status",
+            "stop_reason",
+            "coverage",
+            "progress",
+            "trace",
+            "diagnostics",
+            "graph",
+            "grouping",
+            "reduction",
+            "acquisition_end_reason",
+            "error",
+        )
+    if operation == "verify":
+        return _compact_bounded(
+            payload,
+            "operation",
+            "status",
+            "path",
+            "coverage",
+            "verification",
+            "data",
+            "error",
+        )
+    return dict(payload)
