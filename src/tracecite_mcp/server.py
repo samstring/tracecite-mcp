@@ -9,6 +9,7 @@ from mcp.server import MCPServer
 from tracecite import (
     AggregateRequest,
     EvidenceRequest,
+    EvidenceRoutingPolicy,
     ProviderTarget,
     QueryTarget,
     RangeTarget,
@@ -41,6 +42,19 @@ _RANGE_ARGUMENTS = {
     "expected_sha256",
     "max_chars",
 }
+
+# MCP is an Agent transport, not the canonical storage representation. Keep the
+# model-visible candidate set intentionally small while Core still scans the
+# complete selected scope and preserves provenance/recovery.
+_MCP_DIRECT_CHARS = 8_192
+_MCP_MAX_DIRECT_CHARS = 32_768
+_MCP_BOUNDED_EVIDENCE = 8
+_MCP_BOUNDED_LINE_CHARS = 640
+_MCP_FOCUSED_EVIDENCE = 5
+_MCP_FOCUSED_LINE_CHARS = 480
+_MCP_SIGNAL_HINTS = 3
+_MCP_SIGNAL_SIGNATURES = 128
+_MCP_MATERIALIZE_CHARS = 8_000
 
 
 def _required_text(payload: Mapping[str, Any], key: str) -> str:
@@ -181,6 +195,43 @@ def _range_target(
     )
 
 
+def _agent_routing_policy(store, target: object) -> EvidenceRoutingPolicy:
+    """Return a deterministic MCP transport profile from mechanical session state."""
+
+    state = store.load()
+    recent = tuple(state.recent_operations)
+    total_new = sum(item.new_evidence for item in recent)
+    total_repeated = sum(item.repeated_evidence for item in recent)
+    denominator = total_new + total_repeated
+    repeated_ratio = (total_repeated / denominator) if denominator else 0.0
+    query_calls = int(state.operation_counts.get("search", 0))
+
+    # After the first broad query, later searches should normally be focused.
+    # This is transport routing only; it does not choose a hypothesis or say the
+    # incident is solved.
+    focused = isinstance(target, QueryTarget) and (
+        query_calls >= 1 or repeated_ratio >= 0.35
+    )
+    return EvidenceRoutingPolicy(
+        mode="focused" if focused else "adaptive",
+        fallback_direct_chars=_MCP_DIRECT_CHARS,
+        max_direct_chars=_MCP_MAX_DIRECT_CHARS,
+        bounded_max_evidence=_MCP_BOUNDED_EVIDENCE,
+        bounded_max_line_chars=_MCP_BOUNDED_LINE_CHARS,
+        focused_max_evidence=_MCP_FOCUSED_EVIDENCE,
+        focused_max_line_chars=_MCP_FOCUSED_LINE_CHARS,
+        signal_hint_limit=_MCP_SIGNAL_HINTS,
+        signal_signature_cap=_MCP_SIGNAL_SIGNATURES,
+        focused_after_executions=2,
+        repeated_evidence_ratio=0.35,
+    )
+
+
+def _display_source(target: object) -> str | None:
+    source = getattr(target, "source", None)
+    return str(source) if source is not None else None
+
+
 @mcp.tool()
 def tracecite_retrieve(
     session_id: str,
@@ -194,18 +245,23 @@ def tracecite_retrieve(
     provider={provider_names, request}. Never put start_line/end_line/line_count
     in target; use tracecite_materialize for known ranges.
 
-    Returns compact mechanical evidence plus provenance/coverage/session facts.
-    coverage.new_evidence=0 means no new evidence identity entered this session;
-    repeated evidence may still match the current query. A hit/no_match/complete
-    scope is evidence mechanics, never a causal, sufficiency, or stop decision.
+    MCP returns a bounded Agent projection. For truncated searches, prefer a
+    returned signal_hint and materialize that exact line instead of issuing
+    several more broad searches. coverage.new_evidence=0 means no new evidence
+    identity entered this session. Evidence mechanics never imply causality or
+    sufficiency.
     """
     built_target, providers = _build_retrieve(target)
     store = session_store(session_id)
     result = retrieve(
         EvidenceRequest(target=built_target, cache=cache, providers=providers),
         session=store,
+        routing_policy=_agent_routing_policy(store, built_target),
     )
-    return compact_response(project_session(result.to_dict(), store))
+    return compact_response(
+        project_session(result.to_dict(), store),
+        display_source=_display_source(built_target),
+    )
 
 
 @mcp.tool()
@@ -217,19 +273,20 @@ def tracecite_materialize(
     before: int = 3,
     after: int = 3,
     expected_sha256: str | None = None,
-    max_chars: int = 20_000,
+    max_chars: int = _MCP_MATERIALIZE_CHARS,
 ) -> dict[str, Any]:
     """Read exact bounded context for caller-selected known source lines.
 
-    Use after retrieve gives a useful ref/line range. Reuse the investigation's
-    session_id. Pass expected_sha256 when available to bind the read to the
-    immutable source version already observed. Returned text/provenance are
-    evidence; coverage/novelty describe the mechanical session, not causality.
+    Use after retrieve gives a useful ref/line range. Prefer a narrow window
+    around the selected line. Reuse the investigation session_id and pass
+    expected_sha256 when available. Returned text/provenance are evidence;
+    coverage/novelty are mechanical session facts, not causal conclusions.
     """
     store = session_store(session_id)
+    resolved_source = require_allowed_path(source)
     result = materialize(
         _range_target(
-            source,
+            resolved_source,
             start_line,
             end_line,
             before,
@@ -238,8 +295,12 @@ def tracecite_materialize(
             max_chars,
         ),
         session=store,
+        routing_policy=_agent_routing_policy(store, RangeTarget(resolved_source, start_line)),
     )
-    return compact_response(project_session(result.to_dict(), store))
+    return compact_response(
+        project_session(result.to_dict(), store),
+        display_source=resolved_source,
+    )
 
 
 @mcp.tool()
@@ -251,7 +312,7 @@ def tracecite_replay(
     end_line: int | None = None,
     before: int = 3,
     after: int = 3,
-    max_chars: int = 20_000,
+    max_chars: int = _MCP_MATERIALIZE_CHARS,
 ) -> dict[str, Any]:
     """Deliberately re-read previously covered immutable evidence.
 
@@ -261,9 +322,10 @@ def tracecite_replay(
     imply the investigation is complete.
     """
     store = session_store(session_id)
+    resolved_source = require_allowed_path(source)
     result = replay(
         _range_target(
-            source,
+            resolved_source,
             start_line,
             end_line,
             before,
@@ -272,8 +334,12 @@ def tracecite_replay(
             max_chars,
         ),
         session=store,
+        routing_policy=_agent_routing_policy(store, RangeTarget(resolved_source, start_line)),
     )
-    return compact_response(project_session(result.to_dict(), store))
+    return compact_response(
+        project_session(result.to_dict(), store),
+        display_source=resolved_source,
+    )
 
 
 @mcp.tool()
