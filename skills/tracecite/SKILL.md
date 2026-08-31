@@ -5,82 +5,70 @@ description: Use TraceCite MCP's canonical Evidence Runtime tools while keeping 
 
 # TraceCite MCP Agent Skill
 
-TraceCite is an Evidence Runtime. Use it to acquire, recover, summarize, traverse, and verify evidence. Do not treat TraceCite as a planner, root-cause oracle, or generic file reader.
+TraceCite is an Evidence Runtime, not a planner or root-cause oracle. Use it for bounded evidence acquisition, exact recovery, provenance, novelty, aggregation, traversal and integrity. The Agent still owns hypotheses, investigation order, causal interpretation, sufficiency, the final answer and when to stop.
 
 ## Responsibility boundary
 
+TraceCite owns mechanical facts:
+
+- bounded retrieval and exact materialization;
+- provenance and immutable source identity;
+- RetrievalSession novelty / repeated-evidence accounting;
+- deterministic count / distinct / grouping;
+- caller-seeded deterministic traversal;
+- coverage, truncation, acquisition-end and integrity facts.
+
 The Agent owns:
 
-- understanding the task;
-- hypotheses and alternatives;
-- which source/query/entity/range to inspect;
-- investigation order;
-- causal interpretation;
-- whether evidence is sufficient for a particular conclusion;
-- the final answer;
-- when to stop.
+- what question or hypothesis is unresolved;
+- which source/query/entity/range to inspect next;
+- what evidence means causally;
+- whether the supplied evidence is sufficient;
+- the final conclusion and stopping decision.
 
-TraceCite owns mechanical evidence facts:
+MCP may compact redundant transport fields. Missing compacted fields are not evidence. Mechanical completion is never proof of a causal conclusion.
 
-- bounded retrieval;
-- exact materialization;
-- replay;
-- provenance and immutable source identity;
-- session-scoped novelty and repeated-evidence accounting;
-- deterministic aggregation;
-- caller-scoped deterministic traversal;
-- integrity verification;
-- coverage/truncation/acquisition-end facts.
+## Evidence-efficient investigation rules
 
-The MCP transport may compact or suppress redundant transport fields, but it must not add a hypothesis, root cause, evidence-sufficiency judgment, or stopping decision.
+These rules are the default cadence for runtime evidence:
 
-## Golden rules
+1. **Reuse one `session_id`** for the entire investigation.
+2. **One broad retrieval at a time per source/session.** Do not fire several broad TraceCite searches in parallel before reading the first result; use that result to choose the next focused step.
+3. For a broad `target.kind="query"`, normally request **`max_evidence <= 8`**. The MCP transport may enforce an even smaller focused bound after prior searches.
+4. If a truncated search returns `data.signal_hints`, prefer **materializing one strong hint** before issuing another broad synonym query. Hints are navigation candidates, not formal cited evidence until materialized.
+5. When a concrete line is known, use `tracecite_materialize` with a **small window, normally ±3–5 lines**. Do not expand dozens of lines unless the unresolved question needs that span.
+6. For repeated-pattern questions, use **`tracecite_aggregate` first**. Retrieve only a few representative rows afterward if exact examples are needed.
+7. If `coverage.new_evidence=0`, repeated-only results, or the same immutable range has already been covered, do not issue a synonym/replay unless you can name a materially different purpose.
+8. Once runtime evidence yields a strong exact error/signature, switch to the Agent's normal source-code tools for source exploration when source code is outside the TraceCite-only evidence boundary. Do not use TraceCite as a generic source-code reader.
+9. Prefer the smallest operation that resolves the current uncertainty. Do not continue exploring downstream wrapper symptoms after the causal mechanism is already strongly localized unless an alternative hypothesis still requires it.
 
-1. Use one stable `session_id` for all `tracecite_retrieve`, `tracecite_materialize`, and `tracecite_replay` calls in one investigation. Do not invent a new session for every query.
-2. Use `tracecite_retrieve` to search or acquire evidence. **Never pass `start_line`, `end_line`, `line_count`, `before`, or `after` inside a retrieve target.**
-3. Use `tracecite_materialize` when you already know a concrete line/range and need exact bounded context.
-4. Use `tracecite_replay` only when you deliberately need to see previously covered immutable evidence again.
-5. Use `tracecite_aggregate` for deterministic counts/distinct/grouping, not for causal ranking.
-6. Treat every returned coverage/novelty/end field as a mechanical fact about the requested scope, not an epistemic conclusion about the incident.
-7. Prefer the smallest operation that answers the current unresolved question. Do not repeatedly query the same evidence without a materially different purpose.
+A typical efficient flow is:
+
+```text
+broad query (<=8)
+→ representative evidence + signal_hints
+→ materialize one selected line ±3–5
+→ Agent source-code reasoning
+→ aggregate / one focused verification if needed
+→ answer when the Agent judges the evidence sufficient
+```
 
 ## Tool selection
 
-| Need | Tool | Do not use instead |
-| --- | --- | --- |
-| Search a log/file for a term or regex | `tracecite_retrieve` with `target.kind="query"` | native grep/read on a TraceCite-only evidence source |
-| Acquire a caller-selected source/collection | `tracecite_retrieve` with `target.kind="source"` | range-shaped retrieve arguments |
-| Ask registered evidence providers for bounded evidence | `tracecite_retrieve` with `target.kind="provider"` | model-supplied provider code |
-| Read exact known lines with context | `tracecite_materialize` | `retrieve` + `start_line`/`line_count` |
-| Intentionally re-read already covered exact evidence | `tracecite_replay` | pretending replay is new evidence |
-| Count/distinct/group matching records | `tracecite_aggregate` | inferring causal importance from frequency |
-| Follow caller-selected evidence/entity identities through registered providers | `tracecite_traverse` | asking TraceCite to choose the next hypothesis |
-| Verify an evidence manifest/integrity fact | `tracecite_verify` | treating integrity as causal validation |
+| Need | Tool |
+| --- | --- |
+| Search/acquire caller-selected runtime evidence | `tracecite_retrieve` |
+| Read exact known lines with bounded context | `tracecite_materialize` |
+| Deliberately re-read already-covered immutable evidence | `tracecite_replay` |
+| Count/distinct/group deterministic matches | `tracecite_aggregate` |
+| Follow caller-selected provider identities/entities | `tracecite_traverse` |
+| Verify evidence manifest/integrity | `tracecite_verify` |
 
-## Canonical call shapes
+Do not use native grep/read on a TraceCite-only evidence source. Do not put `start_line`, `end_line`, `line_count`, `before`, or `after` inside a retrieve target; exact ranges belong to `tracecite_materialize`.
 
-### Search a source
+## Canonical calls
 
-Use `target.kind="query"`:
-
-```json
-{
-  "session_id": "incident-123",
-  "target": {
-    "kind": "query",
-    "source": "/allowed/evidence/app.log",
-    "query": "seccomp",
-    "regex": false,
-    "snapshot": true,
-    "segmenter": "auto",
-    "max_evidence": 20
-  }
-}
-```
-
-Useful optional query fields are `last`, `since`, `until`, `fold`, `max_evidence`, and `max_line_chars`.
-
-For regex search:
+### Broad or focused query
 
 ```json
 {
@@ -89,65 +77,47 @@ For regex search:
     "kind": "query",
     "source": "/allowed/evidence/app.log",
     "query": "fail|error|panic",
-    "regex": true
+    "regex": true,
+    "snapshot": true,
+    "max_evidence": 8
   }
 }
 ```
 
-### Acquire a source/collection
+Useful optional query fields: `last`, `since`, `until`, `fold`, `max_evidence`, `max_line_chars`, `segmenter`.
 
-Use `target.kind="source"`:
+### Acquire source orientation
 
 ```json
 {
   "session_id": "incident-123",
   "target": {
     "kind": "source",
-    "source": "/allowed/evidence/logs",
-    "glob": "*.log",
-    "recursive": false,
+    "source": "/allowed/evidence/app.log",
     "segmenter": "auto"
   }
 }
 ```
 
-The source and glob remain constrained by the MCP Host allowlist.
+Source orientation is navigation, not diagnosis. For failure investigation, a broad severe-signal query is often more useful than repeatedly sampling the source.
 
-### Materialize known lines
-
-When retrieval gives a useful `ref` such as `app.log:L120-L126`, read that concrete area with `tracecite_materialize`:
+### Materialize a selected hint/hit
 
 ```json
 {
   "session_id": "incident-123",
   "source": "/allowed/evidence/app.log",
   "start_line": 120,
-  "end_line": 126,
+  "end_line": 120,
   "before": 3,
   "after": 3,
-  "expected_sha256": "<source_sha256 returned by TraceCite>"
+  "expected_sha256": "<source_sha256>"
 }
 ```
 
-`expected_sha256` is strongly preferred when available because it binds the reread to the immutable source version you actually observed.
+Prefer `expected_sha256` when available so the exact read is bound to the immutable source version already observed.
 
-### Replay covered evidence
-
-Replay is deliberate rereading, not discovery:
-
-```json
-{
-  "session_id": "incident-123",
-  "source": "/allowed/evidence/app.log",
-  "start_line": 120,
-  "end_line": 126,
-  "expected_sha256": "<same immutable source sha256>"
-}
-```
-
-Replay requires prior coverage of that immutable range in the same RetrievalSession.
-
-### Aggregate mechanically
+### Aggregate before fetching many repeated examples
 
 ```json
 {
@@ -158,187 +128,91 @@ Replay requires prior coverage of that immutable range in the same RetrievalSess
 }
 ```
 
-Supported aggregation semantics are deterministic properties of the selected scope. A high count does not mean high causal importance.
+A count is a mechanical property, not causal importance.
 
-### Provider retrieval
-
-Only select providers already registered by the MCP Host:
+### Replay
 
 ```json
 {
   "session_id": "incident-123",
-  "target": {
-    "kind": "provider",
-    "provider_names": ["provider-name"],
-    "request": {
-      "evidence_ids": ["seed-evidence-id"],
-      "limit": 20,
-      "depth": 0,
-      "reason": "confirm caller-selected relationship"
-    }
-  }
+  "source": "/allowed/evidence/app.log",
+  "start_line": 120,
+  "end_line": 120,
+  "expected_sha256": "<same immutable source sha256>"
 }
 ```
 
-Do not supply provider objects, executable code, or serialized provider snapshots.
+Replay requires prior coverage in the same RetrievalSession and is deliberate rereading, not discovery.
 
-## How to read TraceCite results
+### Provider retrieval / traversal
 
-The compact MCP response is operation-specific. Fields that are absent were not needed for that operation; absence of a compacted field is not itself evidence.
+Only use providers registered by the MCP Host. The Agent selects provider names, seed Evidence IDs/EntityRefs and bounded limits. Never supply executable provider code or serialized provider snapshots.
 
-### Top-level operation/status
-
-- `operation`: the mechanical TraceCite operation that produced the response.
-- `status="ok"`: the operation executed successfully. It does **not** mean the hypothesis is correct.
-- `status="no_match"` or an equivalent no-match result: nothing matched in the requested scope. It does **not** prove the event is impossible or absent outside that scope.
-- `error`: an execution/validation failure. Fix the call or scope; do not interpret it as evidence about the incident.
+## Reading compact results
 
 ### `evidence[]`
 
-Each evidence row is an addressable evidence identity, not a causal conclusion. Important projected fields can include:
+Evidence rows are addressable mechanical evidence, not causal conclusions. Common fields:
 
-- `id`: stable evidence identity when available;
-- `kind`: evidence kind;
-- `source`: source path/identity;
-- `ref`: human-readable exact line reference such as `app.log:L120-L126`;
-- `start_line` / `end_line`: exact source line bounds when present;
-- `uri`: evidence URI/identity when present;
-- `source_sha256`: immutable source digest. Preserve this for exact materialization/replay and provenance;
-- `preview`: bounded preview for orientation, not necessarily all context needed for the conclusion;
-- `entities`: mechanical entity identities that may be reused as caller-selected traversal seeds.
+- `ref`: exact human-readable line reference;
+- `start_line` / `end_line`;
+- `uri`: stable evidence identity when present;
+- `preview`: bounded orientation text;
+- `entities`: reusable mechanical identities when present.
 
-A hit means "this evidence matched/acquired under the requested mechanics". It does not mean "this caused the failure".
+Shared `source` and `source_sha256` may appear once at the top level instead of being repeated on every row.
 
-### Exact text and novelty data
+### `data.signal_hints`
 
-For retrieve/materialize/replay, `data` may include:
+Signal hints are bounded, line-addressable navigation candidates selected mechanically from a truncated match set. They are not EvidencePointers and are not root-cause rankings. Select a useful hint yourself, then materialize its line before citing it.
 
-- `text`: exact returned bounded text where the operation exposes exact text;
-- `new_text`: text corresponding to newly surfaced evidence where available;
-- `novelty`: mechanical novelty state for this RetrievalSession;
-- `matched_existing_evidence`: evidence matched again even though its body may be suppressed;
-- `replayed`: indicates deliberate replay rather than new discovery.
+### Exact text
 
-If a repeated evidence body is suppressed, the evidence still exists. Use `tracecite_replay` only if seeing the exact covered text again is genuinely necessary.
+`data.text` or `data.new_text` contains exact bounded materialized text. MCP may suppress a duplicate copy when the same body was already delivered in the RetrievalSession. Use replay only when rereading covered text is genuinely necessary.
 
 ### `coverage`
 
-Coverage describes what the requested operation mechanically covered. Common fields include:
-
-- `new_evidence`: number of evidence identities newly observed by this RetrievalSession in this call;
-- `repeated_evidence`: evidence identities already known to the session and encountered again;
-- `complete`: completion of the requested mechanical scope when provided.
-
-Interpretation rules:
+Important facts include:
 
 ```text
-new_evidence > 0       = this session learned new evidence identities
+new_evidence > 0       = new evidence identities entered this session
 new_evidence = 0       = this call added no new evidence identity
-repeated_evidence > 0  = this call revisited evidence already known to the session
-coverage.complete      = requested mechanical scope completed, when applicable
+repeated_evidence > 0  = current request matched already-known evidence
+complete / truncated   = mechanics of the requested scope
 ```
 
-None of these means the investigation is complete or a hypothesis is proven.
+These do not mean the investigation is complete or a hypothesis is proven.
 
 ### `mcp_session`
 
-`mcp_session` is Host/session bookkeeping:
+- `session_id`: stable investigation ID;
+- `revision`: session state revision;
+- `progress`: compact operation/novelty summary.
 
-- `session_id`: the investigation ID you supplied;
-- `revision`: monotonically advances as the RetrievalSession changes;
-- `progress`: mechanical cumulative session summary such as operation counts/coverage facts.
+Use it to recognize repeated work. It is not a confidence score.
 
-Use it to maintain one coherent investigation and recognize repeated work. Do not treat session progress as a confidence score.
+### Routing/progress/end facts
 
-### End, missing, unseen, and correlation facts
-
-Responses may contain:
-
-- `acquisition_end_reason`: why a bounded acquisition mechanically ended;
-- `unseen_ranges`: source ranges not covered by the operation/session when available;
-- `missing_evidence`: mechanically known missing evidence requirements/facts when exposed;
-- `correlation_constraints`: identity/correlation safety constraints;
-- `observed_references` / `observed_relations`: mechanically observed references/relations;
-- `progress`: operation/session progress facts.
-
-These fields define the evidence boundary. They do not select the next hypothesis or decide whether the answer is sufficient.
-
-### Aggregate/traverse/verify results
-
-- `aggregate` / aggregate `data`: deterministic values over the caller-selected query/scope. Frequency is not causality.
-- `traverse.stop_reason` / `acquisition_end_reason`: why bounded traversal mechanically stopped. Frontier exhaustion is not proof.
-- `trace`, `graph`, `grouping`, `reduction`, `diagnostics`: mechanical traversal products; the Agent decides which relationships matter.
-- `verification`: integrity/manifest facts. Integrity verified does not mean causal conclusion verified.
+`routing.mode`, `routing.next_mode`, novelty/progress, `acquisition_end_reason`, `unseen_ranges`, `missing_evidence`, correlation constraints and traversal stop reasons describe evidence transport/acquisition. They do not select a hypothesis or decide that the answer is sufficient.
 
 ## Investigation loop
 
-A good evidence loop is:
-
-1. State the current hypothesis or exact unresolved question to yourself.
-2. Choose the smallest TraceCite operation that can obtain materially relevant evidence for that question.
-3. Read provenance, coverage, novelty, exact text, and acquisition-end facts mechanically.
-4. Update your own causal model. Do not convert `no_match`, `new_evidence=0`, replay, or frontier exhaustion into a causal conclusion.
-5. If the next call would inspect the same covered evidence again, first ask what materially different evidence it is expected to add. Prefer a different query, range, source, entity, or evidence class when one exists.
-6. After repeated low-novelty calls, explicitly reassess the strongest supported conclusion, the exact unresolved question, and whether the supplied inputs contain the evidence class required to resolve it.
-7. Continue only when you can identify a materially different evidence frontier or a necessary deterministic check. Otherwise answer at the current evidence boundary and state what remains unproven.
-
-This is Agent policy, not a TraceCite gate. TraceCite may report mechanical novelty facts; only the Agent decides whether to continue or stop.
-
-## Canonical MCP tools
-
 ```text
-tracecite_retrieve
-tracecite_materialize
-tracecite_replay
-tracecite_aggregate
-tracecite_traverse
-tracecite_verify
+1. Name the exact unresolved question.
+2. Choose the smallest TraceCite operation that can add relevant evidence.
+3. Read provenance + compact evidence + signal hints + novelty/coverage.
+4. Update your own causal model.
+5. Prefer focused materialization/aggregation over another broad search.
+6. If the next call would repeat covered evidence, require a materially different purpose.
+7. Continue only while a distinct evidence frontier or necessary deterministic check remains.
+8. Otherwise answer at the evidence boundary and state what is inference/unproven.
 ```
 
-## Per-tool semantic reminders
-
-### `tracecite_retrieve`
-
-Use for caller-selected source, query, or Host-provider retrieval.
-
-- `target.kind="source"` acquires a caller-selected source/collection mechanically.
-- `target.kind="query"` searches a caller-selected source/query.
-- `target.kind="provider"` addresses process-local providers that the MCP Host already registered; select them by `provider_names` and provide an explicit bounded provider request.
-- `target.kind="range"` is intentionally unsupported. Use `materialize` or `replay` for exact ranges.
-- A hit is evidence, not proof of causality.
-- `no_match` means no match in the searched scope; it does not prove real-world absence.
-- `new_evidence=0` means this RetrievalSession received no new Evidence identity from this call.
-- Repeated evidence can still be relevant to the current query even when its body is suppressed.
-
-### `tracecite_materialize`
-
-Use when you have selected a concrete line/range and need exact bounded context. Preserve returned provenance and SHA-256. Suppressed duplicate bodies do not mean the evidence ceased to exist; the same immutable range can be deliberately replayed later.
-
-### `tracecite_replay`
-
-Use when you intentionally need to see already-covered immutable evidence again. Replay requires the immutable source SHA-256 and prior coverage in the same RetrievalSession. It returns evidence intentionally while keeping `new_evidence=0`. Do not pretend replayed evidence is newly discovered support.
-
-### `tracecite_aggregate`
-
-Use for deterministic `count`, `distinct`, or `group` work over a caller-selected query/scope. Aggregation values are mechanical properties. Frequency or dominance is not causal importance.
-
-### `tracecite_traverse`
-
-Use only after you have selected both one or more provider names already registered by the MCP Host and seed Evidence IDs and/or EntityRefs. You also select explicit traversal limits. Provider objects are never supplied by the model and serialized provider snapshots are not an MCP capability. Traversal follows stable identity/entity relationships mechanically. It does not choose which sibling/entity is most important and does not select a new investigation hypothesis.
-
-### `tracecite_verify`
-
-Use to verify integrity/manifest facts. Verification does not validate a causal conclusion just because the underlying evidence artifact is intact.
-
-## Evidence and correlation safety
-
-Treat provenance, source version, line/range and identity constraints as part of the evidence contract. If TraceCite reports that identifier-only correlation is unsafe, do not collapse distinct scopes using that identifier alone. This is an identity-safety fact, not a claim that the ambiguity caused the incident.
+This is Agent policy, not a TraceCite causal gate.
 
 ## Evidence boundaries
 
-Keep observed facts, supported inference, and unsupported deeper claims distinct. If the available sources cannot establish a deeper cause or fix, state that boundary rather than presenting outside knowledge as observed evidence.
-
-Mechanical exhaustion is not an epistemic conclusion:
+Keep observed facts, supported inference and unsupported deeper claims distinct:
 
 ```text
 no_match                  != impossible event
