@@ -43,14 +43,15 @@ tracecite_traverse
 tracecite_verify
 ```
 
-Use the same `session_id` for `retrieve`, `materialize`, and `replay` calls that belong to one investigation.
+Use one stable `session_id` for `retrieve`, `materialize`, and `replay` calls that belong to the same investigation. A different investigation should use a different ID.
 
 ## `tracecite_retrieve`
 
-Use for caller-selected source inspection or query retrieval.
+Use for caller-selected source, query, or host-provider retrieval.
 
-- `target.kind=source` inspects a source/collection mechanically.
+- `target.kind=source` inspects a caller-selected source/collection mechanically.
 - `target.kind=query` searches a caller-selected query.
+- `target.kind=provider` addresses process-local providers that the MCP Host already registered; select them by `provider_names` and provide an explicit bounded provider request.
 - A hit is evidence, not proof of causality.
 - `no_match` means no match in the searched scope; it does not prove real-world absence.
 - `new_evidence=0` means this RetrievalSession received no new Evidence identity from this call.
@@ -76,7 +77,12 @@ Use for deterministic `count`, `distinct`, or `group` work over a caller-selecte
 
 ## `tracecite_traverse`
 
-Use only after you have selected the provider snapshot and seed IDs/entities. You also choose traversal limits. Traversal follows stable identity/entity relationships mechanically. It does not choose which sibling/entity is most important and does not select a new investigation hypothesis.
+Use only after you have selected both:
+
+- one or more provider names already registered by the MCP Host; and
+- seed Evidence IDs and/or EntityRefs.
+
+You also select explicit traversal limits. Provider objects are never supplied by the model and serialized provider snapshots are not an MCP capability. Traversal follows stable identity/entity relationships mechanically. It does not choose which sibling/entity is most important and does not select a new investigation hypothesis.
 
 ## `tracecite_verify`
 
@@ -88,7 +94,7 @@ Treat provenance, source version, line/range and identity constraints as part of
 
 ## Evidence boundaries
 
-Keep observed facts, supported inference, and unsupported deeper claims distinct. If the available sources cannot establish a deeper cause or fix, say that the supplied evidence does not establish it rather than repeatedly searching the same scope or presenting outside knowledge as observed fact.
+Keep observed facts, supported inference, and unsupported deeper claims distinct. If the available sources cannot establish a deeper cause or fix, state that boundary rather than presenting outside knowledge as observed evidence.
 
 Mechanical exhaustion is not an epistemic conclusion:
 
