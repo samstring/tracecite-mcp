@@ -109,6 +109,44 @@ Provider registration is a Host boundary. MCP does not rank providers, select a 
 
 The same semantic content can be packaged into another Agent's skill system. Agent-specific wrappers should stay thin.
 
+## Verified MCP hosts
+
+The repository has end-to-end Host smoke coverage in `.github/workflows/agent-host-smoke.yml`. These tests exercise real Host implementations rather than calling `tracecite_mcp.server` functions directly.
+
+### Codex CLI
+
+The Codex smoke installs `@openai/codex`, registers `tracecite-mcp` as a stdio MCP server, starts Codex `app-server`, verifies that Codex sees exactly the six canonical TraceCite tools, and calls `tracecite_retrieve` through Codex's MCP tool-call API. It also verifies RetrievalSession repeated-evidence behavior across two calls.
+
+The successful path is:
+
+```text
+Codex CLI / app-server
+        ↓ MCP
+tracecite-mcp
+        ↓ public API
+tracecite-core
+```
+
+### Pi Agent
+
+Pi does not provide the same native MCP client surface, so the Host smoke installs `pi-mcp-adapter` and uses a standard project `.mcp.json`. A deterministic local OpenAI-compatible fake model drives a real Pi Agent tool-call loop, causing Pi to invoke the adapter, call `tracecite_retrieve`, receive TraceCite evidence, and send the tool result back into the Agent loop.
+
+The successful path is:
+
+```text
+Pi Agent
+   ↓ Pi tool call
+pi-mcp-adapter
+   ↓ standard .mcp.json / MCP
+tracecite-mcp
+   ↓ public API
+tracecite-core
+```
+
+`pi-mcp-adapter` internally namespaces remote MCP tools as `<server>_<tool>`. With a server named `tracecite`, the canonical MCP tool `tracecite_retrieve` therefore appears inside that adapter's generic `mcp` proxy as `tracecite_tracecite_retrieve`. This is an adapter-specific routing name only. TraceCite's public MCP tool remains `tracecite_retrieve`; the product API is not renamed to accommodate Pi.
+
+The Host workflow reached green for both Codex and Pi on 2026-08-31. The ordinary MCP unit/stdio/build matrix remained green at the same HEAD.
+
 ## What is deliberately not implemented here
 
 - planner or hypothesis ordering;
@@ -133,6 +171,14 @@ tracecite-mcp
 ```
 
 The default transport is stdio.
+
+For Host-level validation, run or inspect:
+
+```text
+.github/workflows/agent-host-smoke.yml
+scripts/codex_app_server_smoke.py
+scripts/pi_fake_openai_server.py
+```
 
 ## Dependency rule
 
