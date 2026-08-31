@@ -279,7 +279,8 @@ def tracecite_materialize(
 
     Use after retrieve gives a useful ref/line range. Prefer a narrow window
     around the selected line. Reuse the investigation session_id and pass
-    expected_sha256 when available. Returned text/provenance are evidence;
+    expected_sha256 when available to bind the read to the immutable source
+    version already observed. Returned text/provenance are evidence;
     coverage/novelty are mechanical session facts, not causal conclusions.
     """
     store = session_store(session_id)
