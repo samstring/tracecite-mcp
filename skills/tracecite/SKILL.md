@@ -32,6 +32,24 @@ TraceCite owns mechanical evidence facts:
 - integrity verification;
 - coverage/truncation/acquisition-end facts.
 
+The MCP transport may compact or suppress redundant transport fields, but it must not add a hypothesis, root cause, evidence-sufficiency judgment, or stopping decision.
+
+## Investigation loop
+
+Use one stable `session_id` for all `retrieve`, `materialize`, and `replay` calls that belong to the same investigation. A different investigation should use a different ID.
+
+A good evidence loop is:
+
+1. State the current hypothesis or exact unresolved question to yourself.
+2. Choose the smallest TraceCite operation that can obtain materially relevant evidence for that question.
+3. Read the returned provenance, coverage, novelty, exact text, and acquisition-end facts mechanically.
+4. Update your own causal model. Do not convert `no_match`, `new_evidence=0`, replay, or frontier exhaustion into a causal conclusion.
+5. If the next call would inspect the same covered evidence again, first ask what materially different evidence it is expected to add. Prefer a different query, range, source, entity, or evidence class when one exists.
+6. After repeated low-novelty calls, explicitly reassess the strongest supported conclusion, the exact unresolved question, and whether the supplied inputs contain the evidence class required to resolve it.
+7. Continue only when you can identify a materially different evidence frontier or a necessary deterministic check. Otherwise answer at the current evidence boundary and state what remains unproven.
+
+This is Agent policy, not a TraceCite gate. TraceCite may report mechanical novelty facts; only the Agent decides whether to continue or stop.
+
 ## Canonical MCP tools
 
 ```text
@@ -42,8 +60,6 @@ tracecite_aggregate
 tracecite_traverse
 tracecite_verify
 ```
-
-Use one stable `session_id` for `retrieve`, `materialize`, and `replay` calls that belong to the same investigation. A different investigation should use a different ID.
 
 ## `tracecite_retrieve`
 
