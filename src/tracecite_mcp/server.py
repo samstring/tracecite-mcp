@@ -32,6 +32,16 @@ from .source_policy import require_allowed_path, require_safe_glob
 
 mcp = MCPServer("TraceCite")
 
+_RANGE_ARGUMENTS = {
+    "start_line",
+    "end_line",
+    "line_count",
+    "before",
+    "after",
+    "expected_sha256",
+    "max_chars",
+}
+
 
 def _required_text(payload: Mapping[str, Any], key: str) -> str:
     value = str(payload.get(key) or "").strip()
@@ -95,6 +105,15 @@ def _build_retrieve(target: Mapping[str, Any]):
         raise ValueError("target must be an object")
     kind = str(target.get("kind") or "").strip().lower()
 
+    range_args = sorted(_RANGE_ARGUMENTS.intersection(target))
+    if kind == "range" or range_args:
+        detail = f"; remove retrieve target fields: {', '.join(range_args)}" if range_args else ""
+        raise ValueError(
+            "tracecite_retrieve does not read exact line ranges. "
+            "Use tracecite_materialize(session_id, source, start_line, end_line, "
+            f"before, after, expected_sha256, max_chars) instead{detail}"
+        )
+
     if kind == "source":
         source = require_allowed_path(_required_text(target, "source"))
         return (
@@ -136,11 +155,10 @@ def _build_retrieve(target: Mapping[str, Any]):
             raise ValueError("provider target request must be an object")
         return ProviderTarget(_provider_request(request_payload)), providers
 
-    if kind == "range":
-        raise ValueError(
-            "range retrieval is exposed as tracecite_materialize/tracecite_replay"
-        )
-    raise ValueError("target kind must be source, query, or provider")
+    raise ValueError(
+        "target.kind is required and must be 'query', 'source', or 'provider'. "
+        "For exact line/range reads use tracecite_materialize, not tracecite_retrieve."
+    )
 
 
 def _range_target(
@@ -169,11 +187,17 @@ def tracecite_retrieve(
     target: dict[str, Any],
     cache: bool = True,
 ) -> dict[str, Any]:
-    """Retrieve caller-selected evidence.
+    """Search/acquire caller-selected evidence; not an exact-range reader.
 
-    The result contains provenance, coverage and mechanical novelty. It never
-    selects hypotheses, causes, evidence sufficiency, or a stopping decision.
-    Reuse one stable session_id for the same investigation.
+    Reuse one stable session_id for the investigation. target.kind must be:
+    query={source, query, regex?...}, source={source, glob?...}, or
+    provider={provider_names, request}. Never put start_line/end_line/line_count
+    in target; use tracecite_materialize for known ranges.
+
+    Returns compact mechanical evidence plus provenance/coverage/session facts.
+    coverage.new_evidence=0 means no new evidence identity entered this session;
+    repeated evidence may still match the current query. A hit/no_match/complete
+    scope is evidence mechanics, never a causal, sufficiency, or stop decision.
     """
     built_target, providers = _build_retrieve(target)
     store = session_store(session_id)
@@ -195,7 +219,13 @@ def tracecite_materialize(
     expected_sha256: str | None = None,
     max_chars: int = 20_000,
 ) -> dict[str, Any]:
-    """Materialize exact caller-selected source context with provenance."""
+    """Read exact bounded context for caller-selected known source lines.
+
+    Use after retrieve gives a useful ref/line range. Reuse the investigation's
+    session_id. Pass expected_sha256 when available to bind the read to the
+    immutable source version already observed. Returned text/provenance are
+    evidence; coverage/novelty describe the mechanical session, not causality.
+    """
     store = session_store(session_id)
     result = materialize(
         _range_target(
@@ -223,7 +253,13 @@ def tracecite_replay(
     after: int = 3,
     max_chars: int = 20_000,
 ) -> dict[str, Any]:
-    """Explicitly re-read covered immutable evidence without new novelty."""
+    """Deliberately re-read previously covered immutable evidence.
+
+    Requires the same investigation session_id, prior coverage, and immutable
+    source SHA-256. Replay intentionally returns already-known evidence and
+    keeps new_evidence=0; replay is not newly discovered support and does not
+    imply the investigation is complete.
+    """
     store = session_store(session_id)
     result = replay(
         _range_target(
@@ -249,7 +285,12 @@ def tracecite_aggregate(
     group_regex: str | None = None,
     max_groups: int = 100,
 ) -> dict[str, Any]:
-    """Run deterministic count/distinct/group aggregation over caller scope."""
+    """Compute deterministic count/distinct/group facts over caller scope.
+
+    Aggregation is stateless evidence mechanics. coverage.complete means the
+    requested aggregation scope completed; frequency/dominance is not causal
+    importance and this tool never chooses a hypothesis or stopping decision.
+    """
     return compact_response(
         aggregate(
             AggregateRequest(
@@ -271,11 +312,12 @@ def tracecite_traverse(
     seed_entities: list[dict[str, Any]] | None = None,
     limits: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Traverse caller-selected identities through host-registered providers.
+    """Traverse caller-selected identities through Host-registered providers.
 
-    Providers are process-local objects registered by the MCP host, never
-    model-supplied code or serialized provider snapshots. The caller selects
-    providers, seeds and hard limits. Traversal is mechanical, not a planner.
+    The caller chooses providers, seed Evidence IDs/EntityRefs, and hard limits.
+    Providers are process-local Host objects, never model-supplied code or
+    serialized snapshots. stop_reason/frontier exhaustion is a mechanical end
+    condition, not proof, sufficiency, causal ranking, or a next-step decision.
     """
     providers = resolve_providers(provider_names)
     raw_limits = limits or {}
@@ -292,7 +334,11 @@ def tracecite_traverse(
 
 @mcp.tool()
 def tracecite_verify(manifest_path: str) -> dict[str, Any]:
-    """Verify a TraceCite evidence manifest mechanically."""
+    """Verify evidence manifest/integrity facts mechanically.
+
+    A successful verification means the requested integrity check passed. It
+    does not validate a hypothesis, causal chain, evidence sufficiency, or stop.
+    """
     return compact_response(verify(require_allowed_path(manifest_path)))
 
 
