@@ -47,26 +47,25 @@ class Handler(BaseHTTPRequestHandler):
             self._done()
             return
 
-        if "mcp" not in advertised:
-            self._event({"role": "assistant", "content": "MCP_TOOL_MISSING"}, None)
+        if "tracecite_retrieve" not in advertised:
+            self._event(
+                {
+                    "role": "assistant",
+                    "content": "TRACECITE_DIRECT_TOOL_MISSING",
+                },
+                None,
+            )
             self._event({}, "stop")
             self._done()
             return
 
-        # pi-mcp-adapter namespaces each remote MCP tool as <server>_<tool>
-        # inside its generic `mcp` proxy. TraceCite itself keeps the canonical
-        # `tracecite_*` MCP names; this extra prefix belongs only to the Pi adapter.
         arguments: dict[str, Any] = {
-            "server": "tracecite",
-            "tool": "tracecite_tracecite_retrieve",
-            "args": {
-                "session_id": "pi-host-smoke",
-                "target": {
-                    "kind": "query",
-                    "source": str(self.source),
-                    "query": "target",
-                    "segmenter": "rawtext",
-                },
+            "session_id": "pi-host-smoke",
+            "target": {
+                "kind": "query",
+                "source": str(self.source),
+                "query": "target",
+                "segmenter": "rawtext",
             },
         }
         self._event(
@@ -78,7 +77,7 @@ class Handler(BaseHTTPRequestHandler):
                         "id": "call_tracecite_smoke",
                         "type": "function",
                         "function": {
-                            "name": "mcp",
+                            "name": "tracecite_retrieve",
                             "arguments": json.dumps(arguments, separators=(",", ":")),
                         },
                     }
