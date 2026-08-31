@@ -24,6 +24,7 @@ from tracecite import (
 from tracecite.extension.evidence import EntityRef
 from tracecite.extension.retrieval import RetrieveRequest
 
+from .projection import compact_response
 from .providers import resolve_providers
 from .session import project_session, session_store
 from .source_policy import require_allowed_path, require_safe_glob
@@ -180,7 +181,7 @@ def tracecite_retrieve(
         EvidenceRequest(target=built_target, cache=cache, providers=providers),
         session=store,
     )
-    return project_session(result.to_dict(), store)
+    return compact_response(project_session(result.to_dict(), store))
 
 
 @mcp.tool()
@@ -208,7 +209,7 @@ def tracecite_materialize(
         ),
         session=store,
     )
-    return project_session(result.to_dict(), store)
+    return compact_response(project_session(result.to_dict(), store))
 
 
 @mcp.tool()
@@ -236,7 +237,7 @@ def tracecite_replay(
         ),
         session=store,
     )
-    return project_session(result.to_dict(), store)
+    return compact_response(project_session(result.to_dict(), store))
 
 
 @mcp.tool()
@@ -249,14 +250,16 @@ def tracecite_aggregate(
     max_groups: int = 100,
 ) -> dict[str, Any]:
     """Run deterministic count/distinct/group aggregation over caller scope."""
-    return aggregate(
-        AggregateRequest(
-            source=require_allowed_path(source),
-            query=query,
-            regex=regex,
-            operation=operation,
-            group_regex=group_regex,
-            max_groups=max_groups,
+    return compact_response(
+        aggregate(
+            AggregateRequest(
+                source=require_allowed_path(source),
+                query=query,
+                regex=regex,
+                operation=operation,
+                group_regex=group_regex,
+                max_groups=max_groups,
+            )
         )
     )
 
@@ -284,13 +287,13 @@ def tracecite_traverse(
         seed_entities=_entities(seed_entities),
         exploration_policy=TraversalLimits(**dict(raw_limits)),
     )
-    return result.to_dict()
+    return compact_response(result.to_dict())
 
 
 @mcp.tool()
 def tracecite_verify(manifest_path: str) -> dict[str, Any]:
     """Verify a TraceCite evidence manifest mechanically."""
-    return verify(require_allowed_path(manifest_path))
+    return compact_response(verify(require_allowed_path(manifest_path)))
 
 
 def main() -> None:
