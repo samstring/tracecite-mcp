@@ -182,8 +182,6 @@ jobs:
           requests = [json.loads(line) for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines() if line.strip()]
           if "PI_MCP_SMOKE_OK" not in events:
               raise SystemExit("Pi did not complete the fake-model tool loop")
-          if "target event" not in events:
-              raise SystemExit("Pi transcript did not contain TraceCite evidence")
           if len(requests) < 2:
               raise SystemExit(f"expected at least two model requests, got {len(requests)}")
           advertised = {
@@ -193,10 +191,15 @@ jobs:
           }
           if "mcp" not in advertised:
               raise SystemExit(f"Pi MCP proxy tool was not advertised: {advertised}")
-          if not any(
-              isinstance(message, dict) and message.get("role") == "tool"
+          tool_messages = [
+              message
               for message in (requests[-1].get("messages") or [])
-          ):
+              if isinstance(message, dict) and message.get("role") == "tool"
+          ]
+          if not tool_messages:
               raise SystemExit("Pi did not send the MCP tool result back to the model")
+          tool_payload = json.dumps(tool_messages, ensure_ascii=False, sort_keys=True)
+          if "target event" not in tool_payload:
+              raise SystemExit(f"Pi MCP tool result did not contain TraceCite evidence: {tool_payload}")
           print(json.dumps({"host": "pi", "status": "ok", "model_requests": len(requests)}, sort_keys=True))
           PY
