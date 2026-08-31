@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tracecite-mcp"
-version = "0.1.0"
-description = "Thin MCP adapter for TraceCite agent capabilities"
+version = "0.2.0"
+description = "Thin MCP transport for TraceCite's canonical Evidence Runtime"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
