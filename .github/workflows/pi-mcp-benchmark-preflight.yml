@@ -14,11 +14,6 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
-      CASE_DIR: core/benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347
-      PREP: ${{ runner.temp }}/pi-mcp-benchmark/prepared
-      RESULT: ${{ runner.temp }}/pi-mcp-benchmark/result
 
     steps:
       - name: Checkout TraceCite MCP
@@ -38,6 +33,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+
+      - name: Initialize runtime paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-agent"
+            echo "CASE_DIR=$GITHUB_WORKSPACE/core/benchmarks/agent-investigation/scale-cases/kubernetes-140039-runc-5347"
+            echo "PREP=$RUNNER_TEMP/pi-mcp-benchmark/prepared"
+            echo "RESULT=$RUNNER_TEMP/pi-mcp-benchmark/result"
+          } >> "$GITHUB_ENV"
 
       - name: Install Core, MCP, Pi, and MCP adapter
         shell: bash
