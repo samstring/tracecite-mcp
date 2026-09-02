@@ -6,7 +6,7 @@ from typing import Any
 
 from mcp.server import MCPServer
 
-from tracecite.runtime import CapabilitySpec
+from tracecite.runtime import CapabilitySpec, register_capability
 from tracecite_mcp import capability_transport
 
 
@@ -43,6 +43,26 @@ def test_registered_core_capability_becomes_model_visible_mcp_tool() -> None:
     assert "mobile.devices.list" in description
     assert "Safety=read" in description
     assert "Capability input schema" in description
+
+
+def test_mcp_reads_and_executes_the_real_core_capability_registry() -> None:
+    target = MCPServer("core-registry-test")
+    spec = _spec("test.transport.echo")
+
+    def echo(arguments):
+        return {"echo": arguments.get("value")}
+
+    register_capability(spec, echo, replace=True)
+
+    mapping = capability_transport.register_capability_tools(target)
+    tools = {tool.name for tool in asyncio.run(target.list_tools())}
+
+    assert mapping["tracecite_test_transport_echo"] == "test.transport.echo"
+    assert "tracecite_test_transport_echo" in tools
+    assert capability_transport.execute_registered_capability(
+        "test.transport.echo",
+        {"value": "ok"},
+    ) == {"echo": "ok"}
 
 
 def test_extension_discovery_loads_core_registry_before_registering(
