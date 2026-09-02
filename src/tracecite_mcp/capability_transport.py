@@ -1,7 +1,7 @@
 """Project Core-registered AgentCapabilities into MCP tools.
 
 TraceCite Core owns extension discovery, capability metadata, and execution
-safety checks.  MCP only turns the currently registered capabilities into
+safety checks. MCP only turns the currently registered capabilities into
 model-visible tools and supplies explicit host-controlled safety grants.
 """
 
@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping
+from weakref import WeakKeyDictionary
 
 from mcp.server import MCPServer
 
@@ -24,7 +25,7 @@ from tracecite.runtime import CapabilitySpec, execute_capability, list_capabilit
 
 _TOOL_NAME_LIMIT = 64
 _SCHEMA_DESCRIPTION_LIMIT = 3_000
-_REGISTERED_TOOLS: dict[int, dict[str, str]] = {}
+_REGISTERED_TOOLS: WeakKeyDictionary[MCPServer, dict[str, str]] = WeakKeyDictionary()
 
 
 def _env_enabled(name: str) -> bool:
@@ -120,7 +121,7 @@ def register_capability_tools(
     """Register Core capabilities as MCP tools and return tool->capability map."""
 
     selected = list(list_capabilities() if specs is None else specs)
-    registered = _REGISTERED_TOOLS.setdefault(id(server), {})
+    registered = _REGISTERED_TOOLS.setdefault(server, {})
     planned: dict[str, str] = {}
 
     for spec in selected:
