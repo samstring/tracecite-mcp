@@ -25,10 +25,11 @@ from tracecite import (
 from tracecite.extension.evidence import EntityRef
 from tracecite.extension.retrieval import RetrieveRequest
 
+from .capability_transport import discover_and_register_capability_tools
 from .projection import compact_response
 from .providers import resolve_providers
 from .session import project_session, session_store
-from .source_policy import require_allowed_path, require_safe_glob
+from .source_policy import available_evidence_sources, require_allowed_path, require_safe_glob
 
 
 mcp = MCPServer("TraceCite")
@@ -232,6 +233,38 @@ def _display_source(target: object) -> str | None:
     return str(source) if source is not None else None
 
 
+def _missing_path_response(
+    operation: str,
+    requested_path: Any,
+    error: FileNotFoundError,
+    *,
+    field: str = "source",
+    error_code: str = "source_not_found",
+) -> dict[str, Any]:
+    """Return bounded recovery metadata for a missing allowed evidence path."""
+
+    resolved = str(getattr(error, "filename", None) or requested_path or "").strip()
+    payload: dict[str, Any] = {
+        "operation": operation,
+        "status": "error",
+        "error_code": error_code,
+        "error": (
+            f"evidence path does not exist: {resolved}"
+            if resolved
+            else "evidence path does not exist"
+        ),
+    }
+    if resolved:
+        payload[field] = resolved
+    available = available_evidence_sources()
+    if available:
+        payload["available_sources"] = list(available)
+    return compact_response(
+        payload,
+        display_source=resolved if field == "source" else None,
+    )
+
+
 @mcp.tool()
 def tracecite_retrieve(
     session_id: str,
@@ -251,13 +284,23 @@ def tracecite_retrieve(
     identity entered this session. Evidence mechanics never imply causality or
     sufficiency.
     """
-    built_target, providers = _build_retrieve(target)
-    store = session_store(session_id)
-    result = retrieve(
-        EvidenceRequest(target=built_target, cache=cache, providers=providers),
-        session=store,
-        routing_policy=_agent_routing_policy(store, built_target),
-    )
+    source_hint = None
+    if isinstance(target, Mapping):
+        kind = str(target.get("kind") or "").strip().lower()
+        if kind in {"query", "source"}:
+            source_hint = target.get("source")
+    try:
+        built_target, providers = _build_retrieve(target)
+        store = session_store(session_id)
+        result = retrieve(
+            EvidenceRequest(target=built_target, cache=cache, providers=providers),
+            session=store,
+            routing_policy=_agent_routing_policy(store, built_target),
+        )
+    except FileNotFoundError as exc:
+        if source_hint is None:
+            raise
+        return _missing_path_response("retrieve", source_hint, exc)
     return compact_response(
         project_session(result.to_dict(), store),
         display_source=_display_source(built_target),
@@ -283,21 +326,24 @@ def tracecite_materialize(
     Returned text/provenance are evidence; coverage/novelty are mechanical
     session facts, not causal conclusions.
     """
-    store = session_store(session_id)
-    resolved_source = require_allowed_path(source)
-    result = materialize(
-        _range_target(
-            resolved_source,
-            start_line,
-            end_line,
-            before,
-            after,
-            expected_sha256,
-            max_chars,
-        ),
-        session=store,
-        routing_policy=_agent_routing_policy(store, RangeTarget(resolved_source, start_line)),
-    )
+    try:
+        store = session_store(session_id)
+        resolved_source = require_allowed_path(source)
+        result = materialize(
+            _range_target(
+                resolved_source,
+                start_line,
+                end_line,
+                before,
+                after,
+                expected_sha256,
+                max_chars,
+            ),
+            session=store,
+            routing_policy=_agent_routing_policy(store, RangeTarget(resolved_source, start_line)),
+        )
+    except FileNotFoundError as exc:
+        return _missing_path_response("materialize", source, exc)
     return compact_response(
         project_session(result.to_dict(), store),
         display_source=resolved_source,
@@ -322,21 +368,24 @@ def tracecite_replay(
     keeps new_evidence=0; replay is not newly discovered support and does not
     imply the investigation is complete.
     """
-    store = session_store(session_id)
-    resolved_source = require_allowed_path(source)
-    result = replay(
-        _range_target(
-            resolved_source,
-            start_line,
-            end_line,
-            before,
-            after,
-            expected_sha256,
-            max_chars,
-        ),
-        session=store,
-        routing_policy=_agent_routing_policy(store, RangeTarget(resolved_source, start_line)),
-    )
+    try:
+        store = session_store(session_id)
+        resolved_source = require_allowed_path(source)
+        result = replay(
+            _range_target(
+                resolved_source,
+                start_line,
+                end_line,
+                before,
+                after,
+                expected_sha256,
+                max_chars,
+            ),
+            session=store,
+            routing_policy=_agent_routing_policy(store, RangeTarget(resolved_source, start_line)),
+        )
+    except FileNotFoundError as exc:
+        return _missing_path_response("replay", source, exc)
     return compact_response(
         project_session(result.to_dict(), store),
         display_source=resolved_source,
@@ -358,8 +407,8 @@ def tracecite_aggregate(
     requested aggregation scope completed; frequency/dominance is not causal
     importance and this tool never chooses a hypothesis or stopping decision.
     """
-    return compact_response(
-        aggregate(
+    try:
+        result = aggregate(
             AggregateRequest(
                 source=require_allowed_path(source),
                 query=query,
@@ -369,7 +418,9 @@ def tracecite_aggregate(
                 max_groups=max_groups,
             )
         )
-    )
+    except FileNotFoundError as exc:
+        return _missing_path_response("aggregate", source, exc)
+    return compact_response(result)
 
 
 @mcp.tool()
@@ -406,11 +457,28 @@ def tracecite_verify(manifest_path: str) -> dict[str, Any]:
     A successful verification means the requested integrity check passed. It
     does not validate a hypothesis, causal chain, evidence sufficiency, or stop.
     """
-    return compact_response(verify(require_allowed_path(manifest_path)))
+    try:
+        result = verify(require_allowed_path(manifest_path))
+    except FileNotFoundError as exc:
+        return _missing_path_response(
+            "verify",
+            manifest_path,
+            exc,
+            field="path",
+            error_code="manifest_not_found",
+        )
+    return compact_response(result)
+
+
+def initialize_extension_tools(*, strict: bool = False) -> dict[str, str]:
+    """Discover installed TraceCite extensions and project AgentCapabilities."""
+
+    return discover_and_register_capability_tools(mcp, strict=strict)
 
 
 def main() -> None:
-    """Run the evidence-only MCP server over stdio."""
+    """Run the evidence MCP server plus installed extension capabilities."""
+    initialize_extension_tools(strict=False)
     mcp.run(transport="stdio")
 
 
