@@ -21,6 +21,7 @@ EXPECTED_TOOLS = {
 def test_stdio_protocol_round_trip_uses_real_mcp_client(tmp_path: Path) -> None:
     source = tmp_path / "app.log"
     source.write_text("alpha\ntarget event\nomega\n", encoding="utf-8")
+    missing = tmp_path / "guessed-app.log"
 
     async def run() -> None:
         params = StdioServerParameters(
@@ -30,6 +31,7 @@ def test_stdio_protocol_round_trip_uses_real_mcp_client(tmp_path: Path) -> None:
             env={
                 "TRACECITE_MCP_ALLOWED_ROOTS": str(tmp_path),
                 "TRACECITE_MCP_STATE_DIR": str(tmp_path / "state"),
+                "TRACECITE_EVIDENCE_FILES": str(source),
             },
         )
         async with stdio_client(params) as (read, write):
@@ -38,6 +40,23 @@ def test_stdio_protocol_round_trip_uses_real_mcp_client(tmp_path: Path) -> None:
 
                 listed = await session.list_tools()
                 assert {tool.name for tool in listed.tools} == EXPECTED_TOOLS
+
+                recovery = await session.call_tool(
+                    "tracecite_retrieve",
+                    arguments={
+                        "session_id": "stdio-smoke",
+                        "target": {
+                            "kind": "query",
+                            "source": str(missing),
+                            "query": "target",
+                        },
+                    },
+                )
+                assert recovery.is_error is False
+                assert recovery.structured_content is not None
+                assert recovery.structured_content["status"] == "error"
+                assert recovery.structured_content["error_code"] == "source_not_found"
+                assert recovery.structured_content["available_sources"] == [str(source.resolve())]
 
                 arguments = {
                     "session_id": "stdio-smoke",
