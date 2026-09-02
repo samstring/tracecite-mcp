@@ -38,6 +38,34 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - name: Run tests
         run: python -m pytest -q
+      - name: Verify real Mobile extension capability discovery
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install "git+https://github.com/samstring/tracecite-mobile.git@feature_for_agent"
+          python - <<'PY'
+          import asyncio
+
+          from tracecite_mcp import server
+
+          mapping = server.initialize_extension_tools(strict=True)
+          expected = {
+              "tracecite_mobile_environment_probe": "mobile.environment.probe",
+              "tracecite_mobile_devices_list": "mobile.devices.list",
+              "tracecite_mobile_processes_list": "mobile.processes.list",
+              "tracecite_mobile_sessions_list": "mobile.sessions.list",
+              "tracecite_mobile_sessions_start": "mobile.sessions.start",
+              "tracecite_mobile_sessions_stop": "mobile.sessions.stop",
+              "tracecite_mobile_app_launch": "mobile.app.launch",
+          }
+          for tool_name, capability_name in expected.items():
+              assert mapping.get(tool_name) == capability_name, (tool_name, mapping)
+
+          advertised = {tool.name for tool in asyncio.run(server.mcp.list_tools())}
+          assert expected.keys() <= advertised, advertised
+          print("mobile extension capability discovery: ok")
+          PY
       - name: Build source and wheel distributions
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
         run: python -m build
