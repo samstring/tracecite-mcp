@@ -1,11 +1,11 @@
 ---
 name: tracecite
-description: Use TraceCite MCP's canonical Evidence Runtime tools while keeping hypotheses, causal reasoning, evidence sufficiency and stopping decisions with the Agent.
+description: Use TraceCite MCP's canonical Evidence Runtime and installed extension capabilities while keeping hypotheses, causal reasoning, evidence sufficiency and stopping decisions with the Agent.
 ---
 
 # TraceCite MCP Agent Skill
 
-TraceCite is an Evidence Runtime, not a planner or root-cause oracle. Use it for bounded evidence acquisition, exact recovery, provenance, novelty, aggregation, traversal and integrity. The Agent still owns hypotheses, investigation order, causal interpretation, sufficiency, the final answer and when to stop.
+TraceCite is an Evidence Runtime, not a planner or root-cause oracle. Use it for bounded evidence acquisition, exact recovery, provenance, novelty, aggregation, traversal and integrity. Installed domain extensions may also contribute explicit Agent capabilities through Core. The Agent still owns hypotheses, investigation order, causal interpretation, sufficiency, the final answer and when to stop.
 
 ## Responsibility boundary
 
@@ -16,12 +16,14 @@ TraceCite owns mechanical facts:
 - RetrievalSession novelty / repeated-evidence accounting;
 - deterministic count / distinct / grouping;
 - caller-seeded deterministic traversal;
-- coverage, truncation, acquisition-end and integrity facts.
+- coverage, truncation, acquisition-end and integrity facts;
+- installed extension capability metadata and execution safety gates.
 
 The Agent owns:
 
 - what question or hypothesis is unresolved;
 - which source/query/entity/range to inspect next;
+- whether a domain extension capability is relevant to the current task;
 - what evidence means causally;
 - whether the supplied evidence is sufficient;
 - the final conclusion and stopping decision.
@@ -53,7 +55,23 @@ broad query (<=8)
 → answer when the Agent judges the evidence sufficient
 ```
 
+## Missing-source recovery
+
+If an Evidence tool returns:
+
+```text
+status = error
+error_code = source_not_found
+available_sources = [...]
+```
+
+then the Host supplied a bounded task evidence inventory. Do **not** keep guessing filenames or scan the Host filesystem. Choose a relevant path from `available_sources` and retry the intended Evidence operation.
+
+`available_sources` is recovery/navigation metadata, not evidence about the incident. Its presence does not imply every listed source is relevant. Paths outside the Host allowlist remain permission errors and must not be worked around.
+
 ## Tool selection
+
+TraceCite MCP always provides these canonical Evidence tools:
 
 | Need | Tool |
 | --- | --- |
@@ -63,6 +81,16 @@ broad query (<=8)
 | Count/distinct/group deterministic matches | `tracecite_aggregate` |
 | Follow caller-selected provider identities/entities | `tracecite_traverse` |
 | Verify evidence manifest/integrity | `tracecite_verify` |
+
+Installed TraceCite extensions may add tools such as `tracecite_mobile_devices_list` or `tracecite_mobile_sessions_start`. These are projections of Core `AgentCapability` entries, not new Evidence primitives.
+
+For a dynamic extension tool:
+
+- read its description for the canonical capability name, safety level, authorization requirement and declared input schema;
+- pass the capability-specific payload inside the tool's `arguments` object;
+- never try to supply or invent Host safety grants in tool arguments;
+- if Core denies a `live_source`, `live_action`, or authorization requirement, treat that as a Host policy boundary rather than trying to bypass it;
+- use live actions only when the task actually requires that explicit side effect.
 
 Do not use native grep/read on a TraceCite-only evidence source. Do not put `start_line`, `end_line`, `line_count`, `before`, or `after` inside a retrieve target; exact ranges belong to `tracecite_materialize`.
 
@@ -148,6 +176,20 @@ Replay requires prior coverage in the same RetrievalSession and is deliberate re
 
 Only use providers registered by the MCP Host. The Agent selects provider names, seed Evidence IDs/EntityRefs and bounded limits. Never supply executable provider code or serialized provider snapshots.
 
+### Installed extension capability
+
+A projected extension capability uses its MCP tool name but keeps its Core-declared input payload inside `arguments`. For example, if TraceCite Mobile is installed:
+
+```json
+{
+  "arguments": {
+    "platform": "ios"
+  }
+}
+```
+
+may be passed to `tracecite_mobile_devices_list`. Device identifiers must come from an observed device-list result; do not invent them. Capabilities that mutate live state may additionally require explicit Host authorization.
+
 ## Reading compact results
 
 ### `evidence[]`
@@ -200,12 +242,14 @@ Use it to recognize repeated work. It is not a confidence score.
 ```text
 1. Name the exact unresolved question.
 2. Choose the smallest TraceCite operation that can add relevant evidence.
-3. Read provenance + compact evidence + signal hints + novelty/coverage.
-4. Update your own causal model.
-5. Prefer focused materialization/aggregation over another broad search.
-6. If the next call would repeat covered evidence, require a materially different purpose.
-7. Continue only while a distinct evidence frontier or necessary deterministic check remains.
-8. Otherwise answer at the evidence boundary and state what is inference/unproven.
+3. If a source path is missing, recover from available_sources instead of guessing.
+4. Read provenance + compact evidence + signal hints + novelty/coverage.
+5. Update your own causal model.
+6. Prefer focused materialization/aggregation over another broad search.
+7. If the next call would repeat covered evidence, require a materially different purpose.
+8. Use an installed domain capability only when it directly serves the unresolved task.
+9. Continue only while a distinct evidence frontier or necessary deterministic check remains.
+10. Otherwise answer at the evidence boundary and state what is inference/unproven.
 ```
 
 This is Agent policy, not a TraceCite causal gate.
@@ -221,6 +265,8 @@ repeated_evidence>0       != useless evidence
 coverage.complete         != causal chain complete
 frontier exhausted        != hypothesis proven
 integrity verified        != causal conclusion verified
+available_sources         != relevant evidence
+capability installed      != Host authorization granted
 ```
 
-TraceCite provides evidence mechanics; the Agent remains responsible for the decision made from that evidence.
+TraceCite provides evidence and capability mechanics; the Agent remains responsible for the decision made from them.
