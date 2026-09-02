@@ -17,6 +17,7 @@ _MAX_EVIDENCE_ROWS = 8
 _MAX_SIGNAL_HINTS = 3
 _MAX_SAMPLE_ROWS = 6
 _MAX_REPEAT_REFS = 3
+_MAX_AVAILABLE_SOURCES = 50
 
 # Core operation names are target-specific. MCP tool names are intentionally
 # smaller/stable, so projection must classify the actual Core operations rather
@@ -37,6 +38,19 @@ def _copy_present(source: Mapping[str, Any], target: dict[str, Any], *keys: str)
     for key in keys:
         if key in source and source[key] is not None:
             target[key] = source[key]
+
+
+def _copy_recovery_metadata(source: Mapping[str, Any], target: dict[str, Any]) -> None:
+    _copy_present(source, target, "error_code")
+    available = source.get("available_sources")
+    if isinstance(available, (list, tuple)):
+        values = [str(item) for item in available[:_MAX_AVAILABLE_SOURCES]]
+        if values:
+            target["available_sources"] = values
+        if len(available) > len(values):
+            target["available_sources_truncated"] = True
+    if source.get("available_sources_truncated") is True:
+        target["available_sources_truncated"] = True
 
 
 def _source_name(value: Any) -> str:
@@ -344,6 +358,7 @@ def _compact_retrieval(
 ) -> dict[str, Any]:
     projected: dict[str, Any] = {}
     _copy_present(payload, projected, "operation", "status", "query", "regex", "error")
+    _copy_recovery_metadata(payload, projected)
 
     data = payload.get("data") or {}
     if "query" not in projected and isinstance(data, Mapping):
@@ -386,6 +401,7 @@ def _compact_retrieval(
 def _compact_bounded(payload: Mapping[str, Any], *keys: str) -> dict[str, Any]:
     projected: dict[str, Any] = {}
     _copy_present(payload, projected, *keys)
+    _copy_recovery_metadata(payload, projected)
     return projected
 
 
@@ -447,4 +463,6 @@ def compact_response(
             "data",
             "error",
         )
-    return dict(payload)
+    projected = dict(payload)
+    _copy_recovery_metadata(payload, projected)
+    return projected
