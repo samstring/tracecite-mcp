@@ -33,8 +33,8 @@ def _env_enabled(name: str) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
-def _authorized_capabilities() -> set[str]:
-    configured = str(os.environ.get("TRACECITE_MCP_AUTHORIZED_CAPABILITIES") or "")
+def _csv_env(name: str) -> set[str]:
+    configured = str(os.environ.get(name) or "")
     return {
         item.strip().lower()
         for item in configured.split(",")
@@ -42,9 +42,60 @@ def _authorized_capabilities() -> set[str]:
     }
 
 
+def _authorized_capabilities() -> set[str]:
+    return _csv_env("TRACECITE_MCP_AUTHORIZED_CAPABILITIES")
+
+
+def _denied_capabilities() -> set[str]:
+    return _csv_env("TRACECITE_MCP_DENIED_CAPABILITIES")
+
+
+def _extension_grants() -> dict[str, set[str]]:
+    """Parse `<extension>:observe|actions` host grants.
+
+    `actions` includes observation because an Agent that is allowed to perform
+    extension actions must be able to resolve the live targets those actions
+    operate on. Unknown modes are ignored so typos fail closed.
+    """
+
+    grants: dict[str, set[str]] = {}
+    for item in _csv_env("TRACECITE_MCP_GRANTS"):
+        extension, separator, mode = item.partition(":")
+        if not separator or not extension or mode not in {"observe", "actions"}:
+            continue
+        grants.setdefault(extension, set()).add(mode)
+    return grants
+
+
+def _capability_extension(name: str) -> str:
+    return name.strip().lower().partition(".")[0]
+
+
+def _extension_granted(name: str, mode: str) -> bool:
+    modes = _extension_grants().get(_capability_extension(name), set())
+    if mode == "observe":
+        return bool(modes & {"observe", "actions"})
+    if mode == "actions":
+        return "actions" in modes
+    return False
+
+
+def _capability_denied(name: str) -> bool:
+    denied = _denied_capabilities()
+    normalized = name.strip().lower()
+    return "*" in denied or normalized in denied
+
+
 def _capability_authorized(name: str) -> bool:
+    if _capability_denied(name):
+        return False
     authorized = _authorized_capabilities()
-    return "*" in authorized or name.strip().lower() in authorized
+    normalized = name.strip().lower()
+    return (
+        "*" in authorized
+        or normalized in authorized
+        or _extension_granted(name, "actions")
+    )
 
 
 def _jsonable(value: Any) -> Any:
@@ -94,12 +145,25 @@ def execute_registered_capability(
     """Execute through Core with grants controlled only by the MCP host."""
 
     payload = {} if arguments is None else dict(arguments)
+    denied = _capability_denied(name)
     return _jsonable(
         execute_capability(
             name,
             payload,
-            allow_live_source=_env_enabled("TRACECITE_MCP_ALLOW_LIVE_SOURCE"),
-            allow_live_action=_env_enabled("TRACECITE_MCP_ALLOW_LIVE_ACTION"),
+            allow_live_source=(
+                not denied
+                and (
+                    _env_enabled("TRACECITE_MCP_ALLOW_LIVE_SOURCE")
+                    or _extension_granted(name, "observe")
+                )
+            ),
+            allow_live_action=(
+                not denied
+                and (
+                    _env_enabled("TRACECITE_MCP_ALLOW_LIVE_ACTION")
+                    or _extension_granted(name, "actions")
+                )
+            ),
             authorized=_capability_authorized(name),
         )
     )
@@ -130,9 +194,6 @@ def register_capability_tools(
         tool_name = capability_tool_name(spec.name)
         other = planned.get(tool_name) or registered.get(tool_name)
         if other is not None and other != spec.name:
-            # A sanitized-name collision should never silently replace another
-            # extension capability. Add a stable digest and fail only if that
-            # extremely unlikely name also collides.
             digest = hashlib.sha256(spec.name.encode("utf-8")).hexdigest()[:8]
             prefix = tool_name[: _TOOL_NAME_LIMIT - len(digest) - 1]
             tool_name = f"{prefix}_{digest}"
