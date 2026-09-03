@@ -84,21 +84,38 @@ There is no Mobile-specific tool map in MCP. If an installed extension registers
 
 Each dynamic tool description contains the canonical Core capability name, its safety level, authorization requirement, and its declared input schema. Capability arguments are passed inside the tool's `arguments` object.
 
-Execution still goes through Core's `execute_capability()`. The model cannot grant itself live access or authorization. Those grants are Host-owned environment policy:
+Execution still goes through Core's `execute_capability()`. The model cannot grant itself live access or authorization. Host policy owns those grants.
+
+For normal extension use, prefer a single extension-level grant:
 
 ```bash
-# Permit capabilities whose Core safety level is live_source.
-export TRACECITE_MCP_ALLOW_LIVE_SOURCE=1
-
-# Permit capabilities whose Core safety level is live_action.
-export TRACECITE_MCP_ALLOW_LIVE_ACTION=1
-
-# Explicit authorization gate for capabilities that require authorization.
-# Comma-separated canonical Core capability names; `*` explicitly authorizes all.
-export TRACECITE_MCP_AUTHORIZED_CAPABILITIES="mobile.sessions.start,mobile.sessions.cut,mobile.sessions.stop"
+# Allow Mobile observation and Mobile live actions.
+export TRACECITE_MCP_GRANTS="mobile:actions"
 ```
 
-A capability can therefore be installed and visible while execution is still denied by Core until the Host supplies the required grant. This keeps discovery separate from authorization.
+`mobile:actions` covers both live-source observation and authorized `mobile.*` actions, so a newly registered Mobile action does not require another allowlist edit. If the Host should only observe Mobile state without performing actions, use:
+
+```bash
+export TRACECITE_MCP_GRANTS="mobile:observe"
+```
+
+The grant format is generic: `<extension>:observe` or `<extension>:actions`, with comma-separated entries for multiple installed extensions. Unknown grant modes are ignored and therefore fail closed.
+
+Advanced or enterprise Hosts can still use the existing explicit controls:
+
+```bash
+# Legacy/global safety gates remain supported.
+export TRACECITE_MCP_ALLOW_LIVE_SOURCE=1
+export TRACECITE_MCP_ALLOW_LIVE_ACTION=1
+
+# Optional explicit allowlist for capabilities requiring authorization.
+export TRACECITE_MCP_AUTHORIZED_CAPABILITIES="mobile.sessions.start,mobile.sessions.cut,mobile.sessions.stop"
+
+# Optional final denylist. Deny wins over extension grants and explicit allowlists.
+export TRACECITE_MCP_DENIED_CAPABILITIES="mobile.app.stop"
+```
+
+This gives ordinary users one Mobile authorization while preserving a stricter per-capability boundary for managed environments. A capability can remain installed and visible while execution is denied by Host policy.
 
 For TraceCite Mobile, `mobile.sessions.cut` is the normal way to obtain a stable sealed log segment while collection continues. The returned stable artifact should then be investigated through the canonical Evidence tools rather than by adding a Mobile-specific evidence API to MCP.
 
