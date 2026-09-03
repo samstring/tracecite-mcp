@@ -65,9 +65,7 @@ def test_mcp_reads_and_executes_the_real_core_capability_registry() -> None:
     ) == {"echo": "ok"}
 
 
-def test_extension_discovery_loads_core_registry_before_registering(
-    monkeypatch,
-) -> None:
+def test_extension_discovery_loads_core_registry_before_registering(monkeypatch) -> None:
     target = MCPServer("discovery-test")
     spec = _spec("mobile.processes.list")
     calls: list[bool] = []
@@ -112,7 +110,7 @@ def test_mobile_cut_is_discovered_without_mcp_specific_mapping(monkeypatch) -> N
     assert "authorization" in description.lower()
 
 
-def test_capability_execution_uses_host_grants_not_model_arguments(
+def test_capability_execution_uses_legacy_host_grants_not_model_arguments(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -145,6 +143,97 @@ def test_capability_execution_uses_host_grants_not_model_arguments(
         }
     ]
     assert result == {"path": str(tmp_path / "capture.log")}
+
+
+def test_extension_actions_grant_authorizes_all_mobile_actions(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_execute(name, arguments, **policy):
+        calls.append({"name": name, "arguments": arguments, **policy})
+        return {"ok": True}
+
+    monkeypatch.setattr(capability_transport, "execute_capability", fake_execute)
+    monkeypatch.setenv("TRACECITE_MCP_GRANTS", "mobile:actions")
+
+    for name in (
+        "mobile.sessions.start",
+        "mobile.sessions.cut",
+        "mobile.sessions.stop",
+        "mobile.app.launch",
+        "mobile.app.stop",
+    ):
+        capability_transport.execute_registered_capability(name, {})
+
+    assert all(call["allow_live_source"] is True for call in calls)
+    assert all(call["allow_live_action"] is True for call in calls)
+    assert all(call["authorized"] is True for call in calls)
+
+
+def test_observe_grant_does_not_authorize_mobile_actions(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_execute(name, arguments, **policy):
+        calls.append({"name": name, "arguments": arguments, **policy})
+        return {"ok": True}
+
+    monkeypatch.setattr(capability_transport, "execute_capability", fake_execute)
+    monkeypatch.setenv("TRACECITE_MCP_GRANTS", "mobile:observe")
+
+    capability_transport.execute_registered_capability("mobile.devices.list", {})
+    capability_transport.execute_registered_capability("mobile.sessions.start", {})
+
+    assert calls[0]["allow_live_source"] is True
+    assert calls[0]["allow_live_action"] is False
+    assert calls[0]["authorized"] is False
+    assert calls[1]["allow_live_source"] is True
+    assert calls[1]["allow_live_action"] is False
+    assert calls[1]["authorized"] is False
+
+
+def test_capability_denylist_overrides_extension_actions_grant(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_execute(name, arguments, **policy):
+        calls.append({"name": name, "arguments": arguments, **policy})
+        return {"ok": True}
+
+    monkeypatch.setattr(capability_transport, "execute_capability", fake_execute)
+    monkeypatch.setenv("TRACECITE_MCP_GRANTS", "mobile:actions")
+    monkeypatch.setenv("TRACECITE_MCP_DENIED_CAPABILITIES", "mobile.app.stop")
+
+    capability_transport.execute_registered_capability("mobile.app.stop", {})
+
+    assert calls == [
+        {
+            "name": "mobile.app.stop",
+            "arguments": {},
+            "allow_live_source": False,
+            "allow_live_action": False,
+            "authorized": False,
+        }
+    ]
+
+
+def test_invalid_extension_grant_fails_closed(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_execute(name, arguments, **policy):
+        calls.append({"name": name, **policy})
+        return {"ok": True}
+
+    monkeypatch.setattr(capability_transport, "execute_capability", fake_execute)
+    monkeypatch.setenv("TRACECITE_MCP_GRANTS", "mobile:control,mobile:typo")
+
+    capability_transport.execute_registered_capability("mobile.sessions.start", {})
+
+    assert calls == [
+        {
+            "name": "mobile.sessions.start",
+            "allow_live_source": False,
+            "allow_live_action": False,
+            "authorized": False,
+        }
+    ]
 
 
 def test_registering_same_capability_twice_is_idempotent() -> None:
