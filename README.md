@@ -76,7 +76,11 @@ A capability name is mapped deterministically to an MCP-safe tool name. For exam
 mobile.environment.probe  → tracecite_mobile_environment_probe
 mobile.devices.list       → tracecite_mobile_devices_list
 mobile.sessions.start     → tracecite_mobile_sessions_start
+mobile.sessions.cut       → tracecite_mobile_sessions_cut
+mobile.sessions.stop      → tracecite_mobile_sessions_stop
 ```
+
+There is no Mobile-specific tool map in MCP. If an installed extension registers a new `AgentCapability`, MCP discovers it through Core's registry and projects it with the same generic mechanism.
 
 Each dynamic tool description contains the canonical Core capability name, its safety level, authorization requirement, and its declared input schema. Capability arguments are passed inside the tool's `arguments` object.
 
@@ -91,10 +95,12 @@ export TRACECITE_MCP_ALLOW_LIVE_ACTION=1
 
 # Explicit authorization gate for capabilities that require authorization.
 # Comma-separated canonical Core capability names; `*` explicitly authorizes all.
-export TRACECITE_MCP_AUTHORIZED_CAPABILITIES="mobile.sessions.start,mobile.sessions.stop"
+export TRACECITE_MCP_AUTHORIZED_CAPABILITIES="mobile.sessions.start,mobile.sessions.cut,mobile.sessions.stop"
 ```
 
 A capability can therefore be installed and visible while execution is still denied by Core until the Host supplies the required grant. This keeps discovery separate from authorization.
+
+For TraceCite Mobile, `mobile.sessions.cut` is the normal way to obtain a stable sealed log segment while collection continues. The returned stable artifact should then be investigated through the canonical Evidence tools rather than by adding a Mobile-specific evidence API to MCP.
 
 ## RetrievalSession mapping
 
