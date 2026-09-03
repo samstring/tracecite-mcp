@@ -85,6 +85,33 @@ def test_extension_discovery_loads_core_registry_before_registering(
     assert mapping == {"tracecite_mobile_processes_list": "mobile.processes.list"}
 
 
+def test_mobile_cut_is_discovered_without_mcp_specific_mapping(monkeypatch) -> None:
+    target = MCPServer("mobile-cut-discovery")
+    spec = _spec(
+        "mobile.sessions.cut",
+        safety="live_action",
+        requires_authorization=True,
+    )
+    calls: list[bool] = []
+
+    monkeypatch.setattr(
+        capability_transport,
+        "load_extensions",
+        lambda *, strict: calls.append(strict),
+    )
+    monkeypatch.setattr(capability_transport, "list_capabilities", lambda: [spec])
+
+    mapping = capability_transport.discover_and_register_capability_tools(target)
+    tools = {tool.name: tool for tool in asyncio.run(target.list_tools())}
+
+    assert calls == [False]
+    assert mapping == {"tracecite_mobile_sessions_cut": "mobile.sessions.cut"}
+    description = tools["tracecite_mobile_sessions_cut"].description or ""
+    assert "mobile.sessions.cut" in description
+    assert "Safety=live_action" in description
+    assert "authorization" in description.lower()
+
+
 def test_capability_execution_uses_host_grants_not_model_arguments(
     tmp_path: Path,
     monkeypatch,
@@ -100,17 +127,17 @@ def test_capability_execution_uses_host_grants_not_model_arguments(
     monkeypatch.setenv("TRACECITE_MCP_ALLOW_LIVE_ACTION", "0")
     monkeypatch.setenv(
         "TRACECITE_MCP_AUTHORIZED_CAPABILITIES",
-        "mobile.sessions.start,mobile.sessions.stop",
+        "mobile.sessions.start,mobile.sessions.cut,mobile.sessions.stop",
     )
 
     result = capability_transport.execute_registered_capability(
-        "mobile.sessions.start",
+        "mobile.sessions.cut",
         {"device_id": "device-1"},
     )
 
     assert calls == [
         {
-            "name": "mobile.sessions.start",
+            "name": "mobile.sessions.cut",
             "arguments": {"device_id": "device-1"},
             "allow_live_source": True,
             "allow_live_action": False,
