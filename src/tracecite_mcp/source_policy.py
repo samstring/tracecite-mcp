@@ -45,14 +45,94 @@ def allowed_roots() -> tuple[Path, ...]:
     return tuple(result)
 
 
+def _is_within(candidate: Path, roots: tuple[Path, ...]) -> bool:
+    return any(candidate == root or root in candidate.parents for root in roots)
+
+
+def _relative_inventory_matches(value: Path) -> tuple[Path, ...]:
+    """Resolve a caller logical name only through the Host-declared inventory.
+
+    A basename such as ``kubelet.log`` is common in Agent prompts. If the Host
+    declared that exact evidence file, the Agent should not need to know the
+    benchmark/container absolute path. No directory walking is performed.
+    """
+
+    parts = value.parts
+    if not parts or any(part == ".." for part in parts):
+        return ()
+    matches: list[Path] = []
+    for item in available_evidence_sources():
+        candidate = Path(item)
+        candidate_parts = candidate.parts
+        if len(parts) <= len(candidate_parts) and tuple(candidate_parts[-len(parts) :]) == tuple(parts):
+            matches.append(candidate)
+    return tuple(matches)
+
+
+def _relative_root_matches(value: Path, *, must_exist: bool) -> tuple[Path, ...]:
+    """Resolve a safe relative path directly inside Host-authorized roots."""
+
+    if value.is_absolute() or any(part == ".." for part in value.parts):
+        return ()
+    roots = _host_evidence_roots()
+    matches: list[Path] = []
+    for root in roots:
+        candidate = (root / value).resolve()
+        if not (candidate == root or root in candidate.parents):
+            continue
+        if must_exist and not candidate.exists():
+            continue
+        matches.append(candidate)
+    return tuple(matches)
+
+
+def _unique_relative_match(value: Path, *, must_exist: bool) -> Path | None:
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for candidate in (*_relative_inventory_matches(value), *_relative_root_matches(value, must_exist=must_exist)):
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise ValueError(
+            f"ambiguous evidence source {value!s}; use one exact Host-allowed path"
+        )
+    return None
+
+
 def require_allowed_path(
     value: str | Path,
     *,
     must_exist: bool = True,
 ) -> str:
-    """Resolve one caller path inside the Host/TraceCite-owned allowlist."""
+    """Resolve one caller path inside the Host/TraceCite-owned allowlist.
 
-    candidate = Path(value).expanduser().resolve()
+    Relative logical paths are resolved against Host-authorized evidence roots
+    and the explicit evidence inventory. This keeps container-specific absolute
+    paths out of Agent reasoning while preserving the same access boundary.
+    """
+
+    raw = Path(value).expanduser()
+    if not raw.is_absolute():
+        if any(part == ".." for part in raw.parts):
+            raise PermissionError("relative evidence paths cannot contain '..'")
+        relative = _unique_relative_match(raw, must_exist=must_exist)
+        if relative is not None:
+            return str(relative)
+        roots = _host_evidence_roots()
+        missing = (roots[0] / raw).resolve() if roots else raw.resolve()
+        if must_exist:
+            raise FileNotFoundError(
+                errno.ENOENT,
+                "evidence path does not exist in Host-allowed roots",
+                str(missing),
+            )
+
+    candidate = raw.resolve()
     for root in allowed_roots():
         if candidate == root or root in candidate.parents:
             if must_exist and not candidate.exists():
@@ -93,7 +173,7 @@ def available_evidence_sources(
         if not item:
             continue
         candidate = Path(item).expanduser().resolve()
-        if not any(candidate == root or root in candidate.parents for root in evidence_roots):
+        if not _is_within(candidate, evidence_roots):
             continue
         if not candidate.exists() or not candidate.is_file():
             continue
