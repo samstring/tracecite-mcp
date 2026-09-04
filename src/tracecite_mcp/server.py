@@ -2,25 +2,31 @@
 
 from __future__ import annotations
 
+import os
+import shlex
 from typing import Any, Mapping
 
 from mcp.server import MCPServer
 
 from tracecite import (
-    AggregateRequest,
     EvidenceRequest,
-    EvidenceRoutingPolicy,
     ProviderTarget,
     QueryTarget,
     RangeTarget,
     SourceTarget,
     TraversalLimits,
-    aggregate,
     materialize,
     replay,
     retrieve,
     traverse,
     verify,
+)
+from tracecite.runtime import (
+    DEFAULT_MAX_EVIDENCE_BYTES,
+    DEFAULT_MAX_EVIDENCE_TOKENS,
+    EvidenceShellPolicy,
+    EvidenceShellRequest,
+    run_evidence_shell,
 )
 from tracecite.extension.evidence import EntityRef
 from tracecite.extension.retrieval import RetrieveRequest
@@ -43,34 +49,60 @@ _RANGE_ARGUMENTS = {
     "expected_sha256",
     "max_chars",
 }
+_QUERY_POLICY_ARGUMENTS = {
+    "snapshot",
+    "max_evidence",
+    "max_line_chars",
+    "fold",
+}
 
-# MCP is an Agent transport, not the canonical storage representation. Keep the
-# model-visible candidate set intentionally small while Core still scans the
-# complete selected scope and preserves provenance/recovery.
-_MCP_DIRECT_CHARS = 8_192
-_MCP_MAX_DIRECT_CHARS = 32_768
-_MCP_BOUNDED_EVIDENCE = 8
-_MCP_BOUNDED_LINE_CHARS = 640
-_MCP_FOCUSED_EVIDENCE = 5
-_MCP_FOCUSED_LINE_CHARS = 480
-_MCP_SIGNAL_HINTS = 3
-_MCP_SIGNAL_SIGNATURES = 128
-_MCP_MATERIALIZE_CHARS = 8_000
+
+def _positive_env_int(name: str, default: int) -> int:
+    raw = str(os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _host_evidence_policy() -> EvidenceShellPolicy:
+    """Resolve user/Host Evidence policy. Agent tool arguments cannot modify it."""
+
+    return EvidenceShellPolicy(
+        max_evidence_tokens=_positive_env_int(
+            "TRACECITE_EVIDENCE_MAX_TOKENS", DEFAULT_MAX_EVIDENCE_TOKENS
+        ),
+        max_evidence_bytes=_positive_env_int(
+            "TRACECITE_EVIDENCE_MAX_BYTES", DEFAULT_MAX_EVIDENCE_BYTES
+        ),
+    )
+
+
+def _materialize_char_budget() -> int:
+    policy = _host_evidence_policy()
+    configured = _positive_env_int("TRACECITE_MATERIALIZE_MAX_CHARS", 8_000)
+    # Materialize is also Evidence transport. Keep its hard character ceiling
+    # under the same user-owned byte/token policy instead of exposing max_chars
+    # to the Agent.
+    return max(
+        1,
+        min(
+            configured,
+            policy.max_evidence_bytes,
+            policy.max_evidence_tokens * 4,
+        ),
+    )
 
 
 def _required_text(payload: Mapping[str, Any], key: str) -> str:
     value = str(payload.get(key) or "").strip()
     if not value:
         raise ValueError(f"{key} is required")
-    return value
-
-
-def _optional_int(payload: Mapping[str, Any], key: str) -> int | None:
-    value = payload.get(key)
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{key} must be an integer")
     return value
 
 
@@ -115,7 +147,7 @@ def _provider_request(payload: Mapping[str, Any]) -> RetrieveRequest:
     )
 
 
-def _build_retrieve(target: Mapping[str, Any]):
+def _build_nonquery_retrieve(target: Mapping[str, Any]):
     if not isinstance(target, Mapping):
         raise ValueError("target must be an object")
     kind = str(target.get("kind") or "").strip().lower()
@@ -126,7 +158,7 @@ def _build_retrieve(target: Mapping[str, Any]):
         raise ValueError(
             "tracecite_retrieve does not read exact line ranges. "
             "Use tracecite_materialize(session_id, source, start_line, end_line, "
-            f"before, after, expected_sha256, max_chars) instead{detail}"
+            f"before, after, expected_sha256) instead{detail}"
         )
 
     if kind == "source":
@@ -137,25 +169,6 @@ def _build_retrieve(target: Mapping[str, Any]):
                 glob=require_safe_glob(str(target.get("glob") or "*")),
                 recursive=_bool_value(target, "recursive", False),
                 segmenter=str(target.get("segmenter") or "auto"),
-            ),
-            (),
-        )
-
-    if kind == "query":
-        source = require_allowed_path(_required_text(target, "source"))
-        return (
-            QueryTarget(
-                source=source,
-                query=_required_text(target, "query"),
-                regex=_bool_value(target, "regex", False),
-                snapshot=_bool_value(target, "snapshot", True),
-                segmenter=str(target.get("segmenter") or "auto"),
-                last=str(target["last"]) if target.get("last") is not None else None,
-                since=str(target["since"]) if target.get("since") is not None else None,
-                until=str(target["until"]) if target.get("until") is not None else None,
-                fold=_bool_value(target, "fold", False),
-                max_evidence=_optional_int(target, "max_evidence"),
-                max_line_chars=_optional_int(target, "max_line_chars"),
             ),
             (),
         )
@@ -171,8 +184,8 @@ def _build_retrieve(target: Mapping[str, Any]):
         return ProviderTarget(_provider_request(request_payload)), providers
 
     raise ValueError(
-        "target.kind is required and must be 'query', 'source', or 'provider'. "
-        "For exact line/range reads use tracecite_materialize, not tracecite_retrieve."
+        "target.kind must be 'query', 'source', or 'provider'. "
+        "Text query work should normally use tracecite_run."
     )
 
 
@@ -183,7 +196,6 @@ def _range_target(
     before: int,
     after: int,
     expected_sha256: str | None,
-    max_chars: int,
 ) -> RangeTarget:
     return RangeTarget(
         source=require_allowed_path(source),
@@ -192,39 +204,7 @@ def _range_target(
         before=before,
         after=after,
         expected_sha256=expected_sha256,
-        max_chars=max_chars,
-    )
-
-
-def _agent_routing_policy(store, target: object) -> EvidenceRoutingPolicy:
-    """Return a deterministic MCP transport profile from mechanical session state."""
-
-    state = store.load()
-    recent = tuple(state.recent_operations)
-    total_new = sum(item.new_evidence for item in recent)
-    total_repeated = sum(item.repeated_evidence for item in recent)
-    denominator = total_new + total_repeated
-    repeated_ratio = (total_repeated / denominator) if denominator else 0.0
-    query_calls = int(state.operation_counts.get("search", 0))
-
-    # After the first broad query, later searches should normally be focused.
-    # This is transport routing only; it does not choose a hypothesis or say the
-    # incident is solved.
-    focused = isinstance(target, QueryTarget) and (
-        query_calls >= 1 or repeated_ratio >= 0.35
-    )
-    return EvidenceRoutingPolicy(
-        mode="focused" if focused else "adaptive",
-        fallback_direct_chars=_MCP_DIRECT_CHARS,
-        max_direct_chars=_MCP_MAX_DIRECT_CHARS,
-        bounded_max_evidence=_MCP_BOUNDED_EVIDENCE,
-        bounded_max_line_chars=_MCP_BOUNDED_LINE_CHARS,
-        focused_max_evidence=_MCP_FOCUSED_EVIDENCE,
-        focused_max_line_chars=_MCP_FOCUSED_LINE_CHARS,
-        signal_hint_limit=_MCP_SIGNAL_HINTS,
-        signal_signature_cap=_MCP_SIGNAL_SIGNATURES,
-        focused_after_executions=2,
-        repeated_evidence_ratio=0.35,
+        max_chars=_materialize_char_budget(),
     )
 
 
@@ -241,8 +221,6 @@ def _missing_path_response(
     field: str = "source",
     error_code: str = "source_not_found",
 ) -> dict[str, Any]:
-    """Return bounded recovery metadata for a missing allowed evidence path."""
-
     resolved = str(getattr(error, "filename", None) or requested_path or "").strip()
     payload: dict[str, Any] = {
         "operation": operation,
@@ -265,37 +243,115 @@ def _missing_path_response(
     )
 
 
+def _run_shell(
+    *,
+    session_id: str,
+    source: str,
+    program: str,
+    segmenter: str = "auto",
+    last: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict[str, Any]:
+    try:
+        resolved_source = require_allowed_path(source)
+        store = session_store(session_id)
+        payload = run_evidence_shell(
+            EvidenceShellRequest(
+                source=resolved_source,
+                program=program,
+                segmenter=segmenter,
+                last=last,
+                since=since,
+                until=until,
+            ),
+            policy=_host_evidence_policy(),
+            session=store,
+        )
+    except FileNotFoundError as exc:
+        return _missing_path_response("evidence_shell", source, exc)
+    return compact_response(
+        project_session(payload, store),
+        display_source=resolved_source,
+    )
+
+
+@mcp.tool()
+def tracecite_run(
+    session_id: str,
+    source: str,
+    program: str,
+    segmenter: str = "auto",
+    last: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict[str, Any]:
+    """Run one safe Evidence Shell program against the session-fixed SourceVersion.
+
+    Compose literal/regex search, structured filtering, selection, near/seek,
+    count/group/distinct and related mechanical operations in one pipeline.
+    Intermediate rows remain inside TraceCite. Evidence token/byte limits and
+    source snapshot/live policy are user/Host settings and are not Agent
+    arguments. If status=too_broad, refine the program; never ask to enlarge
+    the budget or request a complete locator dump.
+    """
+
+    return _run_shell(
+        session_id=session_id,
+        source=source,
+        program=program,
+        segmenter=segmenter,
+        last=last,
+        since=since,
+        until=until,
+    )
+
+
 @mcp.tool()
 def tracecite_retrieve(
     session_id: str,
     target: dict[str, Any],
     cache: bool = True,
 ) -> dict[str, Any]:
-    """Search/acquire caller-selected evidence; not an exact-range reader.
+    """Compatibility retrieval surface; prefer tracecite_run for text queries.
 
-    Reuse one stable session_id for the investigation. target.kind must be:
-    query={source, query, regex?...}, source={source, glob?...}, or
-    provider={provider_names, request}. Never put start_line/end_line/line_count
-    in target; use tracecite_materialize for known ranges.
-
-    MCP returns a bounded Agent projection. For truncated searches, prefer a
-    returned signal_hint and materialize that exact line instead of issuing
-    several more broad searches. coverage.new_evidence=0 means no new evidence
-    identity entered this session. Evidence mechanics never imply causality or
-    sufficiency.
+    Query targets are translated to one Evidence Shell search under the fixed
+    Host policy. Agent-controlled snapshot/max_evidence/max_line_chars/fold
+    fields are rejected. Source/provider targets remain canonical compatibility
+    operations.
     """
-    source_hint = None
-    if isinstance(target, Mapping):
-        kind = str(target.get("kind") or "").strip().lower()
-        if kind in {"query", "source"}:
-            source_hint = target.get("source")
+
+    if not isinstance(target, Mapping):
+        raise ValueError("target must be an object")
+    kind = str(target.get("kind") or "").strip().lower()
+    if kind == "query":
+        forbidden = sorted(_QUERY_POLICY_ARGUMENTS.intersection(target))
+        if forbidden:
+            raise ValueError(
+                "query policy is owned by the user/Host; remove fields: "
+                + ", ".join(forbidden)
+            )
+        source = _required_text(target, "source")
+        query = _required_text(target, "query")
+        regex = _bool_value(target, "regex", False)
+        command = "regex" if regex else "search"
+        return _run_shell(
+            session_id=session_id,
+            source=source,
+            program=f"{command} {shlex.quote(query)}",
+            segmenter=str(target.get("segmenter") or "auto"),
+            last=str(target["last"]) if target.get("last") is not None else None,
+            since=str(target["since"]) if target.get("since") is not None else None,
+            until=str(target["until"]) if target.get("until") is not None else None,
+        )
+
+    source_hint = target.get("source") if kind == "source" else None
     try:
-        built_target, providers = _build_retrieve(target)
+        built_target, providers = _build_nonquery_retrieve(target)
         store = session_store(session_id)
         result = retrieve(
             EvidenceRequest(target=built_target, cache=cache, providers=providers),
             session=store,
-            routing_policy=_agent_routing_policy(store, built_target),
         )
     except FileNotFoundError as exc:
         if source_hint is None:
@@ -316,16 +372,14 @@ def tracecite_materialize(
     before: int = 3,
     after: int = 3,
     expected_sha256: str | None = None,
-    max_chars: int = _MCP_MATERIALIZE_CHARS,
 ) -> dict[str, Any]:
-    """Read exact bounded context for caller-selected known source lines.
+    """Read exact context for a caller-selected EvidencePointer.
 
-    Use after retrieve gives a useful ref/line range. Prefer a narrow window
-    around the selected line. Reuse the investigation session_id and pass
-    expected_sha256 when available to bind the read to the immutable source version already observed.
-    Returned text/provenance are evidence; coverage/novelty are mechanical
-    session facts, not causal conclusions.
+    The output ceiling is user/Host policy; the Agent cannot pass max_chars.
+    Prefer the pointer's immutable materialize source and expected SHA when
+    supplied. Reuse the same session_id for the whole conversation.
     """
+
     try:
         store = session_store(session_id)
         resolved_source = require_allowed_path(source)
@@ -337,10 +391,8 @@ def tracecite_materialize(
                 before,
                 after,
                 expected_sha256,
-                max_chars,
             ),
             session=store,
-            routing_policy=_agent_routing_policy(store, RangeTarget(resolved_source, start_line)),
         )
     except FileNotFoundError as exc:
         return _missing_path_response("materialize", source, exc)
@@ -359,15 +411,13 @@ def tracecite_replay(
     end_line: int | None = None,
     before: int = 3,
     after: int = 3,
-    max_chars: int = _MCP_MATERIALIZE_CHARS,
 ) -> dict[str, Any]:
-    """Deliberately re-read previously covered immutable evidence.
+    """Deliberately re-read previously covered immutable Evidence.
 
-    Requires the same investigation session_id, prior coverage, and immutable
-    source SHA-256. Replay intentionally returns already-known evidence and
-    keeps new_evidence=0; replay is not newly discovered support and does not
-    imply the investigation is complete.
+    Replay is bounded by the same user/Host Evidence policy and does not expose
+    a caller-controlled output limit.
     """
+
     try:
         store = session_store(session_id)
         resolved_source = require_allowed_path(source)
@@ -379,10 +429,8 @@ def tracecite_replay(
                 before,
                 after,
                 expected_sha256,
-                max_chars,
             ),
             session=store,
-            routing_policy=_agent_routing_policy(store, RangeTarget(resolved_source, start_line)),
         )
     except FileNotFoundError as exc:
         return _missing_path_response("replay", source, exc)
@@ -394,33 +442,30 @@ def tracecite_replay(
 
 @mcp.tool()
 def tracecite_aggregate(
+    session_id: str,
     source: str,
     query: str,
     operation: str = "count",
     regex: bool = False,
-    group_regex: str | None = None,
-    max_groups: int = 100,
 ) -> dict[str, Any]:
-    """Compute deterministic count/distinct/group facts over caller scope.
+    """Compatibility aggregate surface bound to the RetrievalSession SourceVersion.
 
-    Aggregation is stateless evidence mechanics. coverage.complete means the
-    requested aggregation scope completed; frequency/dominance is not causal
-    importance and this tool never chooses a hypothesis or stopping decision.
+    New Agent flows should use tracecite_run with `| count`, `| group FIELD`, or
+    `| distinct FIELD`. This compatibility tool supports count only so it cannot
+    bypass SessionSourceView through the old stateless aggregate implementation.
     """
-    try:
-        result = aggregate(
-            AggregateRequest(
-                source=require_allowed_path(source),
-                query=query,
-                regex=regex,
-                operation=operation,
-                group_regex=group_regex,
-                max_groups=max_groups,
-            )
+
+    if str(operation or "").strip().lower() != "count":
+        raise ValueError(
+            "tracecite_aggregate compatibility supports count only; "
+            "use tracecite_run for group/distinct"
         )
-    except FileNotFoundError as exc:
-        return _missing_path_response("aggregate", source, exc)
-    return compact_response(result)
+    command = "regex" if regex else "search"
+    return _run_shell(
+        session_id=session_id,
+        source=source,
+        program=f"{command} {shlex.quote(query)} | count",
+    )
 
 
 @mcp.tool()
@@ -430,13 +475,8 @@ def tracecite_traverse(
     seed_entities: list[dict[str, Any]] | None = None,
     limits: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Traverse caller-selected identities through Host-registered providers.
+    """Traverse caller-selected identities through Host-registered providers."""
 
-    The caller chooses providers, seed Evidence IDs/EntityRefs, and hard limits.
-    Providers are process-local Host objects, never model-supplied code or
-    serialized snapshots. stop_reason/frontier exhaustion is a mechanical end
-    condition, not proof, sufficiency, causal ranking, or a next-step decision.
-    """
     providers = resolve_providers(provider_names)
     raw_limits = limits or {}
     if not isinstance(raw_limits, Mapping):
@@ -452,11 +492,8 @@ def tracecite_traverse(
 
 @mcp.tool()
 def tracecite_verify(manifest_path: str) -> dict[str, Any]:
-    """Verify evidence manifest/integrity facts mechanically.
+    """Verify evidence manifest/integrity facts mechanically."""
 
-    A successful verification means the requested integrity check passed. It
-    does not validate a hypothesis, causal chain, evidence sufficiency, or stop.
-    """
     try:
         result = verify(require_allowed_path(manifest_path))
     except FileNotFoundError as exc:
@@ -478,6 +515,7 @@ def initialize_extension_tools(*, strict: bool = False) -> dict[str, str]:
 
 def main() -> None:
     """Run the evidence MCP server plus installed extension capabilities."""
+
     initialize_extension_tools(strict=False)
     mcp.run(transport="stdio")
 
