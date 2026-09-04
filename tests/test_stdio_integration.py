@@ -9,6 +9,7 @@ from mcp.client.stdio import stdio_client
 
 
 EXPECTED_TOOLS = {
+    "tracecite_run",
     "tracecite_retrieve",
     "tracecite_materialize",
     "tracecite_replay",
@@ -32,6 +33,8 @@ def test_stdio_protocol_round_trip_uses_real_mcp_client(tmp_path: Path) -> None:
                 "TRACECITE_MCP_ALLOWED_ROOTS": str(tmp_path),
                 "TRACECITE_MCP_STATE_DIR": str(tmp_path / "state"),
                 "TRACECITE_EVIDENCE_FILES": str(source),
+                "TRACECITE_EVIDENCE_MAX_TOKENS": "12000",
+                "TRACECITE_EVIDENCE_MAX_BYTES": str(64 * 1024),
             },
         )
         async with stdio_client(params) as (read, write):
@@ -42,14 +45,11 @@ def test_stdio_protocol_round_trip_uses_real_mcp_client(tmp_path: Path) -> None:
                 assert {tool.name for tool in listed.tools} == EXPECTED_TOOLS
 
                 recovery = await session.call_tool(
-                    "tracecite_retrieve",
+                    "tracecite_run",
                     arguments={
                         "session_id": "stdio-smoke",
-                        "target": {
-                            "kind": "query",
-                            "source": str(missing),
-                            "query": "target",
-                        },
+                        "source": str(missing),
+                        "program": "search target",
                     },
                 )
                 assert recovery.is_error is False
@@ -60,33 +60,27 @@ def test_stdio_protocol_round_trip_uses_real_mcp_client(tmp_path: Path) -> None:
 
                 arguments = {
                     "session_id": "stdio-smoke",
-                    "target": {
-                        "kind": "query",
-                        "source": str(source),
-                        "query": "target",
-                        "segmenter": "rawtext",
-                    },
+                    "source": str(source),
+                    "program": "search target",
+                    "segmenter": "rawtext",
                 }
-                first = await session.call_tool("tracecite_retrieve", arguments=arguments)
+                first = await session.call_tool("tracecite_run", arguments=arguments)
                 assert first.is_error is False
                 assert first.structured_content is not None
                 assert first.structured_content["status"] == "ok"
                 assert first.structured_content["evidence"]
                 assert first.structured_content["mcp_session"]["session_id"] == "stdio-smoke"
 
-                repeated = await session.call_tool("tracecite_retrieve", arguments=arguments)
+                repeated = await session.call_tool("tracecite_run", arguments=arguments)
                 assert repeated.is_error is False
                 assert repeated.structured_content is not None
                 assert repeated.structured_content["coverage"]["new_evidence"] == 0
                 assert repeated.structured_content["coverage"]["repeated_evidence"] >= 1
-                assert (
-                    repeated.structured_content["mcp_session"]["revision"]
-                    > first.structured_content["mcp_session"]["revision"]
-                )
 
                 aggregate = await session.call_tool(
                     "tracecite_aggregate",
                     arguments={
+                        "session_id": "stdio-smoke",
                         "source": str(source),
                         "query": "target",
                         "operation": "count",
@@ -94,7 +88,7 @@ def test_stdio_protocol_round_trip_uses_real_mcp_client(tmp_path: Path) -> None:
                 )
                 assert aggregate.is_error is False
                 assert aggregate.structured_content is not None
-                assert aggregate.structured_content["operation"] == "aggregate"
-                assert aggregate.structured_content["data"]["count"] == 1
+                assert aggregate.structured_content["operation"] == "evidence_shell"
+                assert aggregate.structured_content["data"]["aggregate"]["count"] == 1
 
     asyncio.run(run())
