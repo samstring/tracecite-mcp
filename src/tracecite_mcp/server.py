@@ -35,6 +35,7 @@ from .capability_transport import discover_and_register_capability_tools
 from .projection import compact_response
 from .providers import resolve_providers
 from .session import project_session, session_store
+from .shell_projection import compact_shell_response
 from .source_policy import available_evidence_sources, require_allowed_path, require_safe_glob
 
 
@@ -86,9 +87,6 @@ def _host_evidence_policy() -> EvidenceShellPolicy:
 def _materialize_char_budget() -> int:
     policy = _host_evidence_policy()
     configured = _positive_env_int("TRACECITE_MATERIALIZE_MAX_CHARS", 8_000)
-    # Materialize is also Evidence transport. Keep its hard character ceiling
-    # under the same user-owned byte/token policy instead of exposing max_chars
-    # to the Agent.
     return max(
         1,
         min(
@@ -270,7 +268,7 @@ def _run_shell(
         )
     except FileNotFoundError as exc:
         return _missing_path_response("evidence_shell", source, exc)
-    return compact_response(
+    return compact_shell_response(
         project_session(payload, store),
         display_source=resolved_source,
     )
