@@ -10,12 +10,7 @@ from pathlib import Path
 _MAX_AVAILABLE_SOURCES = 50
 
 
-def allowed_roots() -> tuple[Path, ...]:
-    """Return local roots that MCP evidence tools may access.
-
-    The default is the MCP process working directory. Hosts can widen the
-    policy with TRACECITE_MCP_ALLOWED_ROOTS using the platform path separator.
-    """
+def _host_evidence_roots() -> tuple[Path, ...]:
     configured = os.environ.get("TRACECITE_MCP_ALLOWED_ROOTS")
     if not configured:
         return (Path.cwd().resolve(),)
@@ -29,16 +24,33 @@ def allowed_roots() -> tuple[Path, ...]:
     return roots
 
 
+def _managed_state_root() -> Path | None:
+    raw = str(os.environ.get("TRACECITE_MCP_STATE_DIR") or "").strip()
+    return Path(raw).expanduser().resolve() if raw else None
+
+
+def allowed_roots() -> tuple[Path, ...]:
+    """Return roots that MCP evidence tools may read.
+
+    Host evidence roots authorize caller-selected source files. The configured
+    TraceCite state directory is additionally trusted for Runtime-created
+    immutable snapshots/segments so an EvidencePointer's `materialize_source`
+    can be recovered without widening the caller evidence inventory.
+    """
+
+    result = list(_host_evidence_roots())
+    managed = _managed_state_root()
+    if managed is not None and managed not in result:
+        result.append(managed)
+    return tuple(result)
+
+
 def require_allowed_path(
     value: str | Path,
     *,
     must_exist: bool = True,
 ) -> str:
-    """Resolve one caller path inside the Host allowlist.
-
-    Permission roots and task evidence inventory are deliberately separate:
-    this function never scans an allowed root to discover evidence.
-    """
+    """Resolve one caller path inside the Host/TraceCite-owned allowlist."""
 
     candidate = Path(value).expanduser().resolve()
     for root in allowed_roots():
@@ -51,7 +63,7 @@ def require_allowed_path(
                 )
             return str(candidate)
     raise PermissionError(
-        f"path is outside TRACECITE_MCP_ALLOWED_ROOTS: {candidate}"
+        f"path is outside TRACECITE_MCP_ALLOWED_ROOTS and managed state: {candidate}"
     )
 
 
@@ -62,10 +74,9 @@ def available_evidence_sources(
     """Return the bounded Host-declared evidence inventory for this task.
 
     ``TRACECITE_EVIDENCE_FILES`` is an explicit inventory, not an access
-    control. Values use the platform path separator (``os.pathsep``). Entries
-    are de-duplicated in Host order and are returned only when they currently
-    exist and also fall inside ``TRACECITE_MCP_ALLOWED_ROOTS``. The function
-    never walks directories or infers additional files from allowed roots.
+    control. Managed TraceCite state files are deliberately never discovered or
+    advertised here even though exact Runtime-created snapshot paths may later
+    be materialized.
     """
 
     if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
@@ -74,21 +85,19 @@ def available_evidence_sources(
     if not configured:
         return ()
 
+    evidence_roots = _host_evidence_roots()
     result: list[str] = []
     seen: set[str] = set()
     for raw in configured.split(os.pathsep):
         item = raw.strip()
         if not item:
             continue
-        try:
-            resolved = require_allowed_path(item, must_exist=False)
-        except PermissionError:
-            # Misconfigured inventory entries must not widen the MCP boundary or
-            # leak paths outside the Host's explicit allowlist.
+        candidate = Path(item).expanduser().resolve()
+        if not any(candidate == root or root in candidate.parents for root in evidence_roots):
             continue
-        candidate = Path(resolved)
         if not candidate.exists() or not candidate.is_file():
             continue
+        resolved = str(candidate)
         if resolved in seen:
             continue
         seen.add(resolved)
