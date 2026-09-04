@@ -1,272 +1,205 @@
 ---
 name: tracecite
-description: Use TraceCite MCP's canonical Evidence Runtime and installed extension capabilities while keeping hypotheses, causal reasoning, evidence sufficiency and stopping decisions with the Agent.
+description: Use TraceCite MCP as a session-stable Evidence Runtime. Prefer one Evidence Shell program for mechanical search/filter/aggregate work, refine too-broad results, then materialize exact immutable evidence. The Agent owns hypotheses, causal reasoning, sufficiency and stopping.
 ---
 
 # TraceCite MCP Agent Skill
 
-TraceCite is an Evidence Runtime, not a planner or root-cause oracle. Use it for bounded evidence acquisition, exact recovery, provenance, novelty, aggregation, traversal and integrity. Installed domain extensions may also contribute explicit Agent capabilities through Core. The Agent still owns hypotheses, investigation order, causal interpretation, sufficiency, the final answer and when to stop.
+TraceCite is an Evidence Runtime, not a planner or root-cause oracle. The Agent owns investigation strategy and conclusions. TraceCite owns mechanical retrieval, one immutable SourceVersion per RetrievalSession/source, provenance, novelty, coverage, Evidence transport policy and exact materialization.
 
-## Responsibility boundary
+## Core rules
 
-TraceCite owns mechanical facts:
+1. Reuse one `session_id` for the entire conversation/investigation.
+2. For text evidence, prefer `tracecite_run` over multiple `tracecite_retrieve`/aggregate calls.
+3. Put all mechanical narrowing that can be decided in advance into one pipe-composed Evidence Shell program. Intermediate rows remain inside Runtime and do not enter model context.
+4. Evidence token/byte limits are User/Host policy. They are not Agent parameters.
+5. If TraceCite returns `status=too_broad`, change the search method. Never ask to increase a budget, invent a larger limit, request a complete locator dump, or treat arbitrary first-N truncation as a complete search.
+6. After the final candidate set is small, materialize only the few records needed for reasoning/citation.
+7. Repeated Evidence may be returned only as lightweight identities. `no_new_evidence` means no new Evidence identity was exposed, not that a hypothesis is proven or the investigation is complete.
+8. Do not use native grep/read on a TraceCite-only evidence source.
 
-- bounded retrieval and exact materialization;
-- provenance and immutable source identity;
-- RetrievalSession novelty / repeated-evidence accounting;
-- deterministic count / distinct / grouping;
-- caller-seeded deterministic traversal;
-- coverage, truncation, acquisition-end and integrity facts;
-- installed extension capability metadata and execution safety gates.
-
-The Agent owns:
-
-- what question or hypothesis is unresolved;
-- which source/query/entity/range to inspect next;
-- whether a domain extension capability is relevant to the current task;
-- what evidence means causally;
-- whether the supplied evidence is sufficient;
-- the final conclusion and stopping decision.
-
-MCP may compact redundant transport fields. Missing compacted fields are not evidence. Mechanical completion is never proof of a causal conclusion.
-
-## Evidence-efficient investigation rules
-
-These rules are the default cadence for runtime evidence:
-
-1. **Reuse one `session_id`** for the entire investigation.
-2. **One broad retrieval at a time per source/session.** Do not fire several broad TraceCite searches in parallel before reading the first result; use that result to choose the next focused step.
-3. For a broad `target.kind="query"`, normally request **`max_evidence <= 8`**. The MCP transport may enforce an even smaller focused bound after prior searches.
-4. If a truncated search returns `data.signal_hints`, prefer **materializing one strong hint** before issuing another broad synonym query. Hints are navigation candidates, not formal cited evidence until materialized.
-5. When a concrete line is known, use `tracecite_materialize` with a **small window, normally ±3–5 lines**. Do not expand dozens of lines unless the unresolved question needs that span.
-6. For repeated-pattern questions, use **`tracecite_aggregate` first**. Retrieve only a few representative rows afterward if exact examples are needed.
-7. If `coverage.new_evidence=0`, repeated-only results, or the same immutable range has already been covered, do not issue a synonym/replay unless you can name a materially different purpose.
-8. Once runtime evidence yields a strong exact error/signature, switch to the Agent's normal source-code tools for source exploration when source code is outside the TraceCite-only evidence boundary. Do not use TraceCite as a generic source-code reader.
-9. Prefer the smallest operation that resolves the current uncertainty. Do not continue exploring downstream wrapper symptoms after the causal mechanism is already strongly localized unless an alternative hypothesis still requires it.
-
-A typical efficient flow is:
-
-```text
-broad query (<=8)
-→ representative evidence + signal_hints
-→ materialize one selected line ±3–5
-→ Agent source-code reasoning
-→ aggregate / one focused verification if needed
-→ answer when the Agent judges the evidence sufficient
-```
-
-## Missing-source recovery
-
-If an Evidence tool returns:
-
-```text
-status = error
-error_code = source_not_found
-available_sources = [...]
-```
-
-then the Host supplied a bounded task evidence inventory. Do **not** keep guessing filenames or scan the Host filesystem. Choose a relevant path from `available_sources` and retry the intended Evidence operation.
-
-`available_sources` is recovery/navigation metadata, not evidence about the incident. Its presence does not imply every listed source is relevant. Paths outside the Host allowlist remain permission errors and must not be worked around.
-
-## Tool selection
-
-TraceCite MCP always provides these canonical Evidence tools:
+## Preferred tools
 
 | Need | Tool |
 | --- | --- |
-| Search/acquire caller-selected runtime evidence | `tracecite_retrieve` |
-| Read exact known lines with bounded context | `tracecite_materialize` |
-| Deliberately re-read already-covered immutable evidence | `tracecite_replay` |
-| Count/distinct/group deterministic matches | `tracecite_aggregate` |
-| Follow caller-selected provider identities/entities | `tracecite_traverse` |
-| Verify evidence manifest/integrity | `tracecite_verify` |
+| Search/filter/aggregate/navigate text evidence | `tracecite_run` |
+| Exact context for selected EvidencePointer | `tracecite_materialize` |
+| Intentional reread of covered immutable evidence | `tracecite_replay` |
+| Legacy query/source/provider compatibility | `tracecite_retrieve` |
+| Legacy count compatibility | `tracecite_aggregate` |
+| Provider/entity traversal | `tracecite_traverse` |
+| Manifest/integrity check | `tracecite_verify` |
 
-Installed TraceCite extensions may add tools such as `tracecite_mobile_devices_list` or `tracecite_mobile_sessions_start`. These are projections of Core `AgentCapability` entries, not new Evidence primitives.
+Installed extensions may add domain tools such as mobile capabilities. Those are explicit Core capabilities, not Evidence Shell commands.
 
-For a dynamic extension tool:
+## Evidence Shell
 
-- read its description for the canonical capability name, safety level, authorization requirement and declared input schema;
-- pass the capability-specific payload inside the tool's `arguments` object;
-- never try to supply or invent Host safety grants in tool arguments;
-- if Core denies a `live_source`, `live_action`, or authorization requirement, treat that as a Host policy boundary rather than trying to bypass it;
-- use live actions only when the task actually requires that explicit side effect.
+`tracecite_run` executes a controlled read-only evidence program, not arbitrary bash.
 
-Do not use native grep/read on a TraceCite-only evidence source. Do not put `start_line`, `end_line`, `line_count`, `before`, or `after` inside a retrieve target; exact ranges belong to `tracecite_materialize`.
-
-## Canonical calls
-
-### Broad or focused query
-
-```json
-{
-  "session_id": "incident-123",
-  "target": {
-    "kind": "query",
-    "source": "/allowed/evidence/app.log",
-    "query": "fail|error|panic",
-    "regex": true,
-    "snapshot": true,
-    "max_evidence": 8
-  }
-}
+```text
+Agent program
+    ↓
+fixed SessionSourceView / SourceVersion
+    ↓
+raw search hit
+    ↓
+Segmenter restores complete logical Record
+    ↓
+search/filter/aggregate/navigation stages remain Runtime-side
+    ↓
+User/Host Evidence budget gate
+    ↓
+complete admitted pointer set OR status=too_broad
 ```
 
-Useful optional query fields: `last`, `since`, `until`, `fold`, `max_evidence`, `max_line_chars`, `segmenter`.
+Commands are pipe-composable with `|`.
 
-### Acquire source orientation
+### Search/filter
 
-```json
-{
-  "session_id": "incident-123",
-  "target": {
-    "kind": "source",
-    "source": "/allowed/evidence/app.log",
-    "segmenter": "auto"
-  }
-}
+```text
+all
+search TEXT
+grep TEXT
+grep -F TEXT
+grep -E REGEX
+grep -i TEXT
+grep -v TEXT
+regex REGEX
+exclude TEXT
+exclude-regex REGEX
+where FIELD == VALUE
+where FIELD != VALUE
+where FIELD > VALUE
+where FIELD >= VALUE
+where FIELD < VALUE
+where FIELD <= VALUE
+where FIELD contains VALUE
+where FIELD startswith VALUE
+where FIELD endswith VALUE
+where FIELD matches REGEX
+exists FIELD
+missing FIELD
+lines START [END]
 ```
 
-Source orientation is navigation, not diagnosis. For failure investigation, a broad severe-signal query is often more useful than repeatedly sampling the source.
+`FIELD` can be a Segmenter/JSON field, dotted nested field, `timestamp`, `source`, `line`/`start_line`, or `end_line`.
 
-### Materialize a selected hint/hit
+### Transform/select
 
-```json
-{
-  "session_id": "incident-123",
-  "source": "/allowed/evidence/app.log",
-  "start_line": 120,
-  "end_line": 120,
-  "before": 3,
-  "after": 3,
-  "expected_sha256": "<source_sha256>"
-}
+```text
+sort FIELD [asc|desc]
+reverse
+take N
+head N
+first N
+last N
+tail N
+near LINE [BEFORE] [AFTER]
+near line=LINE before=N after=N
+seek LINE [BEFORE] [AFTER]
 ```
 
-Prefer `expected_sha256` when available so the exact read is bound to the immutable source version already observed.
+`take/head/first/last/tail` intentionally change query semantics. Do not add them merely to bypass `too_broad` unless a subset is actually the question being asked.
 
-### Aggregate before fetching many repeated examples
+### Aggregate
 
-```json
-{
-  "source": "/allowed/evidence/app.log",
-  "query": "failed",
-  "operation": "count",
-  "regex": false
-}
+```text
+count
+group FIELD
+distinct FIELD
+uniq FIELD
 ```
 
-A count is a mechanical property, not causal importance.
+Prefer aggregate stages when the intermediate match set is large but the fact needed is small.
 
-### Replay
+### Examples
 
-```json
-{
-  "session_id": "incident-123",
-  "source": "/allowed/evidence/app.log",
-  "start_line": 120,
-  "end_line": 120,
-  "expected_sha256": "<same immutable source sha256>"
-}
+```text
+search 'statusCode' | where statusCode >= 500 | where serviceName == ts-route-service
 ```
 
-Replay requires prior coverage in the same RetrievalSession and is deliberate rereading, not discovery.
-
-### Provider retrieval / traversal
-
-Only use providers registered by the MCP Host. The Agent selects provider names, seed Evidence IDs/EntityRefs and bounded limits. Never supply executable provider code or serialized provider snapshots.
-
-### Installed extension capability
-
-A projected extension capability uses its MCP tool name but keeps its Core-declared input payload inside `arguments`. For example, if TraceCite Mobile is installed:
-
-```json
-{
-  "arguments": {
-    "platform": "ios"
-  }
-}
+```text
+regex 'panic|fatal|error|failed' | search 'ts-route-service'
 ```
 
-may be passed to `tracecite_mobile_devices_list`. Device identifiers must come from an observed device-list result; do not invent them. Capabilities that mutate live state may additionally require explicit Host authorization.
+```text
+search 'statusCode' | where statusCode >= 500 | group serviceName
+```
 
-## Reading compact results
+```text
+search 'request_id=abc' | near line=94771 before=3 after=5
+```
 
-### `evidence[]`
+Time/format scope can be passed to `tracecite_run` with `last`, `since`, `until`, and `segmenter`.
 
-Evidence rows are addressable mechanical evidence, not causal conclusions. Common fields:
+## `too_broad`
 
-- `ref`: exact human-readable line reference;
+A normal Evidence Shell search has no hidden candidate-count truncation. The complete final matched Record set either fits the configured policy or TraceCite returns:
+
+```text
+status = too_broad
+coverage.too_broad = true
+data.reason = MATCHED_EVIDENCE_BUDGET_EXCEEDED
+data.refine_query = true
+evidence = []
+```
+
+An aggregate can similarly exceed its own transport budget.
+
+When this happens, refine by adding more selective literals/regex/field predicates, narrowing time or line scope, or changing the question to an aggregate. Do not change the budget.
+
+## SourceVersion / session stability
+
+The RetrievalSession is the stability boundary. On first access to a logical source, TraceCite binds one immutable SourceVersion for that `session_id`.
+
+For the rest of that session:
+
+- mutable/live source changes do not silently refresh the version;
+- snapshot/live cut/SHA work is not repeated for every Agent search;
+- every `tracecite_run`, materialize and replay operates in the same stable evidence world.
+
+A new RetrievalSession may reuse an already verified version if the source fingerprint is unchanged, or bind a new version if it changed.
+
+The Agent does not control `snapshot`, `max_evidence`, `max_line_chars`, source mode, live cut policy, Evidence token budget, or Evidence byte budget. Do not pass those fields to compatibility query retrieval.
+
+## Materialize
+
+Each shell Evidence row may contain:
+
+- `ref`: logical caller-visible source/line reference;
+- `uri`: stable Evidence identity;
 - `start_line` / `end_line`;
-- `uri`: stable evidence identity when present;
-- `preview`: bounded orientation text;
-- `entities`: reusable mechanical identities when present.
+- `sha256`;
+- `materialize_source`: exact immutable snapshot/segment path to use for exact recovery;
+- `preview`: bounded orientation text.
 
-Shared `source` and `source_sha256` may appear once at the top level instead of being repeated on every row.
+For final reasoning/citation, call `tracecite_materialize` with the row's `materialize_source`, exact line/range and SHA when available. The Agent may choose `before`/`after`, but the maximum returned Evidence size remains a User/Host limit and is not an Agent argument.
 
-### `data.signal_hints`
+Materialized raw text is Evidence. An unmaterialized preview/pointer is a navigation candidate, not surrounding context you have already inspected.
 
-Signal hints are bounded, line-addressable navigation candidates selected mechanically from a truncated match set. They are not EvidencePointers and are not root-cause rankings. Select a useful hint yourself, then materialize its line before citing it.
+## Compatibility surfaces
 
-### Exact text
+`tracecite_retrieve` remains for source/provider operations and old clients. A query target is internally translated to Evidence Shell and must not contain `snapshot`, `max_evidence`, `max_line_chars`, or `fold`.
 
-`data.text` or `data.new_text` contains exact bounded materialized text. MCP may suppress a duplicate copy when the same body was already delivered in the RetrievalSession. Use replay only when rereading covered text is genuinely necessary.
+`tracecite_aggregate` is legacy count compatibility and requires `session_id`. For new group/distinct/count work, use `tracecite_run` so the operation is bound to the same SessionSourceView.
 
-### `coverage`
+## Missing source recovery
 
-Important facts include:
+If a tool returns `error_code=source_not_found` with `available_sources`, select an appropriate Host-allowed path from that inventory. Do not guess filesystem paths or scan outside the allowlist.
 
-```text
-new_evidence > 0       = new evidence identities entered this session
-new_evidence = 0       = this call added no new evidence identity
-repeated_evidence > 0  = current request matched already-known evidence
-complete / truncated   = mechanics of the requested scope
-```
-
-These do not mean the investigation is complete or a hypothesis is proven.
-
-### `mcp_session`
-
-- `session_id`: stable investigation ID;
-- `revision`: session state revision;
-- `progress`: compact operation/novelty summary.
-
-Use it to recognize repeated work. It is not a confidence score.
-
-### Routing/progress/end facts
-
-`routing.mode`, `routing.next_mode`, novelty/progress, `acquisition_end_reason`, `unseen_ranges`, `missing_evidence`, correlation constraints and traversal stop reasons describe evidence transport/acquisition. They do not select a hypothesis or decide that the answer is sufficient.
-
-## Investigation loop
-
-```text
-1. Name the exact unresolved question.
-2. Choose the smallest TraceCite operation that can add relevant evidence.
-3. If a source path is missing, recover from available_sources instead of guessing.
-4. Read provenance + compact evidence + signal hints + novelty/coverage.
-5. Update your own causal model.
-6. Prefer focused materialization/aggregation over another broad search.
-7. If the next call would repeat covered evidence, require a materially different purpose.
-8. Use an installed domain capability only when it directly serves the unresolved task.
-9. Continue only while a distinct evidence frontier or necessary deterministic check remains.
-10. Otherwise answer at the evidence boundary and state what is inference/unproven.
-```
-
-This is Agent policy, not a TraceCite causal gate.
-
-## Evidence boundaries
-
-Keep observed facts, supported inference and unsupported deeper claims distinct:
+## Evidence semantics
 
 ```text
 no_match                  != impossible event
 new_evidence=0            != investigation complete
 repeated_evidence>0       != useless evidence
 coverage.complete         != causal chain complete
-frontier exhausted        != hypothesis proven
 integrity verified        != causal conclusion verified
-available_sources         != relevant evidence
-capability installed      != Host authorization granted
+status=too_broad          != no evidence exists
 ```
 
-TraceCite provides evidence and capability mechanics; the Agent remains responsible for the decision made from them.
+TraceCite reports mechanical facts. The Agent decides what they mean.
+
+## Extensions
+
+Installed TraceCite extensions may expose dynamic capability tools. Read each tool description and declared schema. Never invent Host authorization/safety grants or bypass a denied capability. Live actions should only be used when the task explicitly requires that side effect.
