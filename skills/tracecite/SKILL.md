@@ -32,9 +32,18 @@ TraceCite is an Evidence Runtime, not a planner or root-cause oracle. The Agent 
 
 Installed extensions may add domain tools such as mobile capabilities. Those are explicit Core capabilities, not Evidence Shell commands.
 
+## Evidence source names
+
+For `source`, use either:
+
+- an exact Host-allowed path returned by TraceCite; or
+- a unique relative logical name such as `app.log` when that name resolves to exactly one Host-authorized evidence file.
+
+Do not spend investigation turns discovering container-specific absolute paths. TraceCite resolves a unique logical name inside the Host evidence roots/inventory. If a logical name is missing or ambiguous, use the structured source error / `available_sources` to select an exact allowed path.
+
 ## Evidence Shell
 
-`tracecite_run` executes a controlled read-only evidence program, not arbitrary bash.
+`tracecite_run` accepts familiar read-only Unix-like search spelling, but it does **not** execute arbitrary host bash. Common `grep`, `head`, and `tail` forms are normalized into TraceCite's controlled Record pipeline, so the same SourceVersion, provenance, novelty and Evidence budget rules always apply.
 
 ```text
 Agent program
@@ -54,16 +63,50 @@ complete admitted pointer set OR status=too_broad
 
 Commands are pipe-composable with `|`.
 
-### Search/filter
+### Familiar grep syntax
+
+The common forms below are accepted, including combined short flags:
+
+```text
+grep TEXT
+grep -i TEXT
+grep -E REGEX
+grep -F TEXT
+grep -v TEXT
+grep -c TEXT
+grep -Ei REGEX
+grep -ic TEXT
+grep -n TEXT
+grep -e PATTERN
+grep -m N PATTERN
+grep --ignore-case TEXT
+grep --extended-regexp REGEX
+grep --fixed-strings TEXT
+grep --invert-match TEXT
+grep --count TEXT
+grep --max-count N PATTERN
+```
+
+Default `grep` follows the common basic-regex expectation, so escaped alternation such as `grep 'error\|failed'` works. Use `-E` for extended regex and `-F` when regex metacharacters must stay literal.
+
+`grep -c` becomes a Runtime-side count aggregate: the matching record bodies do not cross into model context. `-m N` selects the first N matches and therefore intentionally changes completeness semantics.
+
+Familiar selection spellings also work:
+
+```text
+head 30
+head -30
+head -n 30
+tail 30
+tail -30
+tail -n 30
+```
+
+### TraceCite-native search/filter
 
 ```text
 all
 search TEXT
-grep TEXT
-grep -F TEXT
-grep -E REGEX
-grep -i TEXT
-grep -v TEXT
 regex REGEX
 exclude TEXT
 exclude-regex REGEX
@@ -112,14 +155,16 @@ uniq FIELD
 
 Prefer aggregate stages when the intermediate match set is large but the fact needed is small.
 
-### Examples
+### Compose work into one call
+
+Prefer one pipeline when you already know the mechanical narrowing steps. Do not repeatedly search, inspect a count, and then issue another equivalent search when the same operations can stay Runtime-side.
 
 ```text
-search 'statusCode' | where statusCode >= 500 | where serviceName == ts-route-service
+grep -Ei 'panic|fatal|error|failed' | grep -i 'runtime' | head -30
 ```
 
 ```text
-regex 'panic|fatal|error|failed' | search 'ts-route-service'
+search 'statusCode' | where statusCode >= 500 | where serviceName == ts-route-service
 ```
 
 ```text
@@ -131,6 +176,8 @@ search 'request_id=abc' | near line=94771 before=3 after=5
 ```
 
 Time/format scope can be passed to `tracecite_run` with `last`, `since`, `until`, and `segmenter`.
+
+If a familiar Unix option is not supported, use the error to rewrite that stage with `search`, `regex`, `where`, `count`, `head` or another documented TraceCite stage. Do not switch to native shell access for a TraceCite-only evidence file.
 
 ## `too_broad`
 
@@ -185,7 +232,7 @@ Materialized raw text is Evidence. An unmaterialized preview/pointer is a naviga
 
 ## Missing source recovery
 
-If a tool returns `error_code=source_not_found` with `available_sources`, select an appropriate Host-allowed path from that inventory. Do not guess filesystem paths or scan outside the allowlist.
+If a tool returns `error_code=source_not_found` with `available_sources`, select an appropriate Host-allowed path from that inventory. Do not guess paths outside the allowlist or scan the host filesystem.
 
 ## Evidence semantics
 
