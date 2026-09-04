@@ -13,50 +13,45 @@ def isolate_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TRACECITE_MCP_ALLOWED_ROOTS", str(tmp_path))
 
 
-def test_broad_queries_are_bounded_then_focused(tmp_path: Path) -> None:
+def test_broad_query_returns_too_broad_until_agent_refines(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source = tmp_path / "large.log"
     source.write_text(
         "".join(
-            f"line={index} level=error msg=failed worker={index} " + ("x" * 120) + "\n"
+            f"line={index} level=error worker={index} " + ("x" * 120) + "\n"
             for index in range(100)
         ),
         encoding="utf-8",
     )
+    monkeypatch.setenv("TRACECITE_EVIDENCE_MAX_TOKENS", "100")
+    monkeypatch.setenv("TRACECITE_EVIDENCE_MAX_BYTES", "1024")
 
-    first = server.tracecite_retrieve(
-        "incident-a",
-        {
-            "kind": "query",
-            "source": str(source),
-            "query": "level=error",
-            "max_evidence": 100,
-            "max_line_chars": 5000,
-        },
-    )
-    second = server.tracecite_retrieve(
-        "incident-a",
-        {
-            "kind": "query",
-            "source": str(source),
-            "query": "failed",
-            "max_evidence": 100,
-            "max_line_chars": 5000,
-        },
+    broad = server.tracecite_run("incident-a", str(source), "search level=error")
+    focused = server.tracecite_run(
+        "incident-a", str(source), "search level=error | search worker=42"
     )
 
-    assert len(first["evidence"]) <= 8
-    assert first["data"]["routing"]["mode"] == "bounded"
-    assert len(second["evidence"]) <= 5
-    assert second["data"]["routing"]["mode"] == "focused"
-    assert "unmatched" not in second["coverage"]
+    assert broad["status"] == "too_broad"
+    assert broad["evidence"] == []
+    assert broad["data"]["refine_query"] is True
+    assert focused["status"] == "ok"
+    assert len(focused["evidence"]) == 1
 
 
-def test_materialize_default_transport_is_smaller_than_old_twenty_k(tmp_path: Path) -> None:
+def test_materialize_transport_is_host_capped_not_agent_configurable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source = tmp_path / "app.log"
     source.write_text(
         "".join(f"{index} " + ("x" * 400) + "\n" for index in range(100)),
         encoding="utf-8",
     )
+    monkeypatch.setenv("TRACECITE_EVIDENCE_MAX_TOKENS", "1000")
+    monkeypatch.setenv("TRACECITE_EVIDENCE_MAX_BYTES", "4096")
+    monkeypatch.setenv("TRACECITE_MATERIALIZE_MAX_CHARS", "2048")
 
     result = server.tracecite_materialize(
         "incident-a",
@@ -69,7 +64,5 @@ def test_materialize_default_transport_is_smaller_than_old_twenty_k(tmp_path: Pa
 
     body = result.get("data", {}).get("text") or result.get("data", {}).get("new_text") or ""
     assert body
-    # Core preserves the final line terminator when the bounded body lands
-    # exactly on max_chars, so the serialized text can be one character over.
-    assert len(body) <= 8_001
+    assert len(body) <= 2049
     assert not ({"text", "new_text"} <= set(result.get("data", {})))
