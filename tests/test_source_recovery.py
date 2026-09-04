@@ -64,6 +64,38 @@ def test_successful_source_read_does_not_echo_inventory(
     assert "error_code" not in result
 
 
+def test_managed_snapshot_can_be_materialized_outside_evidence_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_root = tmp_path / "evidence"
+    state_root = tmp_path / "private-state"
+    evidence_root.mkdir()
+    source = evidence_root / "app.log"
+    source.write_text("alpha\ntarget event\nomega\n", encoding="utf-8")
+    monkeypatch.setenv("TRACECITE_MCP_ALLOWED_ROOTS", str(evidence_root))
+    monkeypatch.setenv("TRACECITE_MCP_STATE_DIR", str(state_root))
+    monkeypatch.setenv("TRACECITE_EVIDENCE_FILES", str(source))
+
+    found = server.tracecite_run("investigation-a", str(source), "search target")
+    pointer = found["evidence"][0]
+    materialize_source = Path(pointer["materialize_source"]).resolve()
+
+    assert state_root.resolve() in materialize_source.parents
+    exact = server.tracecite_materialize(
+        "investigation-a",
+        str(materialize_source),
+        pointer["start_line"],
+        end_line=pointer["end_line"],
+        before=0,
+        after=0,
+        expected_sha256=pointer["sha256"],
+    )
+    assert exact["status"] == "ok"
+    assert "target event" in (exact.get("data") or {}).get("text", "")
+    assert available_evidence_sources() == (str(source.resolve()),)
+
+
 def test_inventory_never_widens_allowed_roots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
