@@ -43,7 +43,7 @@ def test_mcp_exposes_evidence_shell_and_canonical_helpers() -> None:
 
 def test_agent_tool_schemas_do_not_expose_host_budget_or_snapshot_controls() -> None:
     tools = _tools()
-    run_schema = tools["tracecite_run"].inputSchema
+    run_schema = tools["tracecite_run"].input_schema
     run_text = str(run_schema)
     for forbidden in (
         "max_evidence",
@@ -56,9 +56,9 @@ def test_agent_tool_schemas_do_not_expose_host_budget_or_snapshot_controls() -> 
     ):
         assert forbidden not in run_text
 
-    materialize_text = str(tools["tracecite_materialize"].inputSchema)
+    materialize_text = str(tools["tracecite_materialize"].input_schema)
     assert "max_chars" not in materialize_text
-    replay_text = str(tools["tracecite_replay"].inputSchema)
+    replay_text = str(tools["tracecite_replay"].input_schema)
     assert "max_chars" not in replay_text
 
 
