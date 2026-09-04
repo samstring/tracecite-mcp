@@ -2,9 +2,9 @@ name: MCP CI
 
 on:
   push:
-    branches: [main, feature_for_agent]
+    branches: [main, feature_for_agent, feature_for_agent_refacotr_shell]
   pull_request:
-    branches: [main, feature_for_agent]
+    branches: [main, feature_for_agent, feature_for_agent_refacotr_shell]
 
 jobs:
   test:
@@ -33,7 +33,7 @@ jobs:
       - name: Upgrade packaging tools
         run: python -m pip install --upgrade pip setuptools wheel
       - name: Install TraceCite Core feature branch
-        run: python -m pip install "git+https://github.com/samstring/tracecite-core.git@feature_for_agent"
+        run: python -m pip install "git+https://github.com/samstring/tracecite-core.git@feature_for_agent_refacotr_shell"
       - name: Install MCP package and test dependencies
         run: python -m pip install -e ".[dev]"
       - name: Run tests
@@ -46,9 +46,7 @@ jobs:
           python -m pip install "git+https://github.com/samstring/tracecite-mobile.git@feature_for_agent"
           python - <<'PY'
           import asyncio
-
           from tracecite_mcp import server
-
           mapping = server.initialize_extension_tools(strict=True)
           expected = {
               "tracecite_mobile_environment_probe": "mobile.environment.probe",
@@ -61,7 +59,6 @@ jobs:
           }
           for tool_name, capability_name in expected.items():
               assert mapping.get(tool_name) == capability_name, (tool_name, mapping)
-
           advertised = {tool.name for tool in asyncio.run(server.mcp.list_tools())}
           assert expected.keys() <= advertised, advertised
           print("mobile extension capability discovery: ok")
