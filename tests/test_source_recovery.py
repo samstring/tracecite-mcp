@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from tracecite_mcp import server
-from tracecite_mcp.source_policy import available_evidence_sources
+from tracecite_mcp.source_policy import available_evidence_sources, require_allowed_path
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +39,56 @@ def test_missing_source_returns_host_declared_available_sources(
     assert result["error_code"] == "source_not_found"
     assert result["source"] == str(missing.resolve())
     assert result["available_sources"] == [str(first.resolve()), str(second.resolve())]
+
+
+def test_relative_logical_source_resolves_inside_host_root(tmp_path: Path) -> None:
+    source = tmp_path / "kubelet.log"
+    source.write_text("alpha\ntarget event\nomega\n", encoding="utf-8")
+
+    assert require_allowed_path("kubelet.log") == str(source.resolve())
+
+    result = server.tracecite_run(
+        "investigation-relative",
+        "kubelet.log",
+        "search target",
+        segmenter="rawtext",
+    )
+    assert result["status"] == "ok"
+    assert result["evidence"]
+
+
+def test_relative_inventory_basename_resolves_nested_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    source = nested / "kubelet.log"
+    source.write_text("target event\n", encoding="utf-8")
+    monkeypatch.setenv("TRACECITE_EVIDENCE_FILES", str(source))
+
+    assert require_allowed_path("kubelet.log") == str(source.resolve())
+
+
+def test_ambiguous_relative_source_requires_exact_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    first = left / "app.log"
+    second = right / "app.log"
+    first.write_text("one\n", encoding="utf-8")
+    second.write_text("two\n", encoding="utf-8")
+    monkeypatch.setenv(
+        "TRACECITE_EVIDENCE_FILES",
+        os.pathsep.join([str(first), str(second)]),
+    )
+
+    with pytest.raises(ValueError, match="ambiguous evidence source"):
+        require_allowed_path("app.log")
 
 
 def test_successful_source_read_does_not_echo_inventory(
