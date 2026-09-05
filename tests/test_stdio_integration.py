@@ -10,6 +10,7 @@ from mcp.client.stdio import stdio_client
 
 EXPECTED_TOOLS = {
     "tracecite_run",
+    "tracecite_analyze",
     "tracecite_retrieve",
     "tracecite_materialize",
     "tracecite_replay",
