@@ -18,6 +18,9 @@ _MAX_SIGNAL_HINTS = 3
 _MAX_SAMPLE_ROWS = 6
 _MAX_REPEAT_REFS = 3
 _MAX_AVAILABLE_SOURCES = 50
+_MAX_OBSERVED_REFERENCES = 8
+_MAX_OBSERVED_RELATIONS = 8
+_MAX_VISIBLE_LINES = 8
 
 # Core operation names are target-specific. MCP tool names are intentionally
 # smaller/stable, so projection must classify the actual Core operations rather
@@ -296,6 +299,52 @@ def _compact_repeat_refs(value: Any, display_source: str | None) -> list[dict[st
     return result
 
 
+def _limited_lines(value: Any) -> list[int]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [
+        int(item)
+        for item in list(value)[:_MAX_VISIBLE_LINES]
+        if isinstance(item, int) and not isinstance(item, bool)
+    ]
+
+
+def _compact_observed_references(value: Any) -> tuple[list[dict[str, Any]], int]:
+    if not isinstance(value, (list, tuple)):
+        return [], 0
+    raw = list(value)
+    result: list[dict[str, Any]] = []
+    for row in raw[:_MAX_OBSERVED_REFERENCES]:
+        if not isinstance(row, Mapping):
+            continue
+        item: dict[str, Any] = {}
+        _copy_present(row, item, "kind", "key", "value", "visible_occurrences")
+        lines = _limited_lines(row.get("visible_lines"))
+        if lines:
+            item["visible_lines"] = lines
+        if item:
+            result.append(item)
+    return result, len(raw)
+
+
+def _compact_observed_relations(value: Any) -> tuple[list[dict[str, Any]], int]:
+    if not isinstance(value, (list, tuple)):
+        return [], 0
+    raw = list(value)
+    result: list[dict[str, Any]] = []
+    for row in raw[:_MAX_OBSERVED_RELATIONS]:
+        if not isinstance(row, Mapping):
+            continue
+        item: dict[str, Any] = {}
+        _copy_present(row, item, "kind", "relation", "relation_id", "subject", "object")
+        lines = _limited_lines(row.get("visible_lines"))
+        if lines:
+            item["visible_lines"] = lines
+        if item:
+            result.append(item)
+    return result, len(raw)
+
+
 def _compact_data(family: str, value: Any, display_source: str | None) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         return {}
@@ -347,9 +396,31 @@ def _compact_data(family: str, value: Any, display_source: str | None) -> dict[s
         "correlation_constraints",
         "missing_evidence",
         "acquisition_end_reason",
-        "observed_references",
-        "observed_relations",
     )
+
+    observed_references, observed_reference_count = _compact_observed_references(
+        value.get("observed_references")
+    )
+    if observed_reference_count:
+        projected["observed_reference_count"] = observed_reference_count
+    if observed_references:
+        projected["observed_references"] = observed_references
+    if observed_reference_count > len(observed_references):
+        projected["observed_references_omitted_from_transport"] = (
+            observed_reference_count - len(observed_references)
+        )
+
+    observed_relations, observed_relation_count = _compact_observed_relations(
+        value.get("observed_relations")
+    )
+    if observed_relation_count:
+        projected["observed_relation_count"] = observed_relation_count
+    if observed_relations:
+        projected["observed_relations"] = observed_relations
+    if observed_relation_count > len(observed_relations):
+        projected["observed_relations_omitted_from_transport"] = (
+            observed_relation_count - len(observed_relations)
+        )
     return projected
 
 
