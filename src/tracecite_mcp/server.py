@@ -24,14 +24,18 @@ from tracecite import (
 from tracecite.runtime import (
     DEFAULT_MAX_EVIDENCE_BYTES,
     DEFAULT_MAX_EVIDENCE_TOKENS,
+    EvidenceAnalysisSpec,
+    EvidenceComputeRequest,
     EvidenceShellPolicy,
     EvidenceShellRequest,
+    run_evidence_compute,
     run_evidence_shell,
 )
 from tracecite.extension.evidence import EntityRef
 from tracecite.extension.retrieval import RetrieveRequest
 
 from .capability_transport import discover_and_register_capability_tools
+from .compute_projection import compact_compute_response
 from .projection import compact_response
 from .providers import resolve_providers
 from .session import project_session, session_store
@@ -321,6 +325,54 @@ def tracecite_run(
         last=last,
         since=since,
         until=until,
+    )
+
+
+@mcp.tool()
+def tracecite_analyze(
+    session_id: str,
+    source: str,
+    analyses: list[dict[str, str]],
+    segmenter: str = "auto",
+) -> dict[str, Any]:
+    """Run several caller-selected bounded aggregate programs in one tool call.
+
+    Use this when the Agent has already decided that multiple mechanical
+    count/group/distinct/top-K checks are needed over the same evidence source.
+    TraceCite may fuse compatible scans internally. This tool does not choose
+    which analyses are relevant and does not perform causal reasoning.
+    """
+
+    if not isinstance(analyses, list):
+        raise ValueError("analyses must be an array")
+    specs: list[EvidenceAnalysisSpec] = []
+    for item in analyses:
+        if not isinstance(item, Mapping):
+            raise ValueError("each analysis must be an object with name and program")
+        specs.append(
+            EvidenceAnalysisSpec(
+                name=_required_text(item, "name"),
+                program=_required_text(item, "program"),
+            )
+        )
+
+    try:
+        resolved_source = require_allowed_path(source)
+        store = session_store(session_id)
+        payload = run_evidence_compute(
+            EvidenceComputeRequest(
+                source=resolved_source,
+                analyses=tuple(specs),
+                segmenter=segmenter,
+            ),
+            policy=_host_evidence_policy(),
+            session=store,
+        )
+    except FileNotFoundError as exc:
+        return _missing_path_response("evidence_compute", source, exc)
+    return compact_compute_response(
+        project_session(payload, store),
+        display_source=resolved_source,
     )
 
 
