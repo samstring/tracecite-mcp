@@ -241,6 +241,25 @@ def _missing_path_response(
     )
 
 
+def _operation_error_response(
+    operation: str,
+    error: Exception | str,
+    *,
+    source: str | None = None,
+    error_code: str,
+    guidance: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "operation": operation,
+        "status": "error",
+        "error_code": error_code,
+        "error": str(error),
+    }
+    if guidance:
+        payload["guidance"] = guidance
+    return compact_response(payload, display_source=source)
+
+
 def _run_shell(
     *,
     session_id: str,
@@ -405,7 +424,7 @@ def tracecite_replay(
     session_id: str,
     source: str,
     start_line: int,
-    expected_sha256: str,
+    expected_sha256: str | None = None,
     end_line: int | None = None,
     before: int = 3,
     after: int = 3,
@@ -413,8 +432,20 @@ def tracecite_replay(
     """Deliberately re-read previously covered immutable Evidence.
 
     Replay is bounded by the same user/Host Evidence policy and does not expose
-    a caller-controlled output limit.
+    a caller-controlled output limit. Semantic replay failures are returned as
+    structured tool results so MCP adapters do not misreport them as missing
+    parameters and provoke blind retries.
     """
+
+    expected = str(expected_sha256 or "").strip()
+    if not expected:
+        return _operation_error_response(
+            "replay",
+            "expected_sha256 is required for immutable replay identity",
+            source=source,
+            error_code="replay_requires_sha256",
+            guidance="Reuse the SHA from the EvidencePointer or prior materialize result.",
+        )
 
     try:
         store = session_store(session_id)
@@ -426,12 +457,27 @@ def tracecite_replay(
                 end_line,
                 before,
                 after,
-                expected_sha256,
+                expected,
             ),
             session=store,
         )
     except FileNotFoundError as exc:
         return _missing_path_response("replay", source, exc)
+    except (TypeError, ValueError) as exc:
+        message = str(exc)
+        guidance = (
+            "Replay only works for immutable context already materialized in this RetrievalSession. "
+            "Reuse the same source/SHA and the same or a smaller before/after range."
+            if "materialized" in message or "covered" in message
+            else "Use the exact source, line range and SHA returned by TraceCite materialize/evidence pointers."
+        )
+        return _operation_error_response(
+            "replay",
+            exc,
+            source=source,
+            error_code="replay_unavailable",
+            guidance=guidance,
+        )
     return compact_response(
         project_session(result.to_dict(), store),
         display_source=resolved_source,
