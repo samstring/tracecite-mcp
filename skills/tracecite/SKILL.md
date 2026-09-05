@@ -21,6 +21,8 @@ The Host may expose TraceCite as direct tools. When `tracecite_analyze`, `tracec
 8. Evidence token/byte limits, source lifecycle/snapshot policy, materialization ceilings, and compute policy belong to the User/Host, not the Agent.
 9. Do not bypass a TraceCite-only evidence boundary with native grep/read/bash.
 10. Use request-level `last` / `since` / `until` for a whole-operation time scope when that is what you mean. A `where` stage is one field predicate; combine several predicates with additional pipeline stages unless the tool schema explicitly documents another boolean form.
+11. If the task or environment explicitly names a small Evidence source whose contents are needed, read that named source through `tracecite_run` with an explicit bounded selection such as `head N`; do not switch to native `cat`/read merely because the source is small. This rule is about respecting the Evidence boundary, not about preferring any particular file, field, or investigation order.
+12. `search TEXT` is literal text search. Use `regex PATTERN` when alternation, character classes, anchors, repetition, or other regular-expression semantics are intended. Do not encode several alternatives with regex metacharacters inside `search` and then interpret `no_match` as evidence that none of the alternatives occurred.
 
 These rules organize computation only. They never prescribe which service, metric, event, time window, comparison, hypothesis, or stopping condition is correct for a task.
 
@@ -70,7 +72,10 @@ Examples of generic shapes:
 where FIELD >= VALUE | where OTHER_FIELD == VALUE | group THIRD_FIELD | sort count desc | head 10
 sort FIELD asc numeric | head 3 | project FIELD
 search TEXT | near line=LINE before=3 after=5
+regex 'ERROR|WARN' | head 10
 ```
+
+For an explicitly named small Evidence source, a bounded whole-source read is also a normal `tracecite_run` operation, for example `head 20`. The bound is chosen to fit the known source/task; it is not a rule to sample large sources.
 
 Do not spend model turns discovering or re-describing TraceCite syntax when the direct tools are already available.
 
