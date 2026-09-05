@@ -212,13 +212,28 @@ def test_materialize_then_replay_preserves_novelty_boundary(tmp_path: Path) -> N
     assert replayed["data"]["novelty"]["state"] == "replay"
 
 
-def test_replay_requires_prior_coverage(tmp_path: Path) -> None:
+def test_replay_requires_prior_coverage_returns_structured_error(tmp_path: Path) -> None:
     source = tmp_path / "app.log"
     source.write_text("alpha\ntarget event\nomega\n", encoding="utf-8")
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
 
-    with pytest.raises(ValueError, match="has not been materialized"):
-        server.tracecite_replay("fresh-session", str(source), 2, digest, before=0, after=0)
+    result = server.tracecite_replay("fresh-session", str(source), 2, digest, before=0, after=0)
+
+    assert result["status"] == "error"
+    assert result["error_code"] == "replay_unavailable"
+    assert "has not been materialized" in result["error"]
+    assert "same or a smaller before/after" in result["guidance"]
+
+
+def test_replay_missing_sha_returns_structured_error(tmp_path: Path) -> None:
+    source = tmp_path / "app.log"
+    source.write_text("alpha\n", encoding="utf-8")
+
+    result = server.tracecite_replay("session", str(source), 1, expected_sha256=None)
+
+    assert result["status"] == "error"
+    assert result["error_code"] == "replay_requires_sha256"
+    assert "SHA" in result["guidance"]
 
 
 def test_aggregate_compatibility_is_session_bound_count(tmp_path: Path) -> None:
