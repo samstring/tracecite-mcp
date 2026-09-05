@@ -17,11 +17,30 @@ def state_root() -> Path:
     return (Path.home() / ".tracecite" / "mcp").resolve()
 
 
+def effective_session_id(session_id: str) -> str:
+    """Return the Host-pinned investigation ID when one is configured.
+
+    Some Agent transports synthesize a fresh request/session token for every
+    tool call. That must not silently fragment one evidence investigation into
+    many Core RetrievalSessions. A Host that knows the conversation boundary may
+    therefore pin one stable ID with ``TRACECITE_MCP_SESSION_ID``. When the Host
+    does not pin an ID, the caller-provided value keeps the existing behavior.
+    """
+
+    pinned = str(os.environ.get("TRACECITE_MCP_SESSION_ID") or "").strip()
+    if pinned:
+        return pinned
+    supplied = str(session_id or "").strip()
+    if not supplied:
+        raise ValueError("session_id is required")
+    return supplied
+
+
 def session_store(session_id: str) -> RetrievalSessionStore:
-    """Resolve one MCP session ID to Core's canonical RetrievalSessionStore."""
+    """Resolve one MCP investigation to Core's canonical RetrievalSessionStore."""
     return RetrievalSessionStore(
         state_root(),
-        session_id,
+        effective_session_id(session_id),
         namespace="_retrieval_sessions",
         legacy_evidence_context=False,
     )
@@ -40,3 +59,6 @@ def project_session(
         "progress": state.retrieval_summary(),
     }
     return result
+
+
+__all__ = ["effective_session_id", "project_session", "session_store", "state_root"]
