@@ -40,7 +40,7 @@ def _compact_pointer(
     *,
     common_sha: str | None,
 ) -> dict[str, Any]:
-    """Keep one line-addressable pointer without repeating envelope identity."""
+    """Keep one line-addressable pointer while dropping redundant URI text."""
 
     item: dict[str, Any] = {}
     start = row.get("start_line")
@@ -55,12 +55,17 @@ def _compact_pointer(
         item["start_line"] = start
         item["end_line"] = end
 
-    # The request envelope already carries the logical source, and a common SHA
-    # is projected once for the whole result. Keep per-row identity only when it
-    # cannot be reconstructed from that envelope.
+    # Preserve the established materialize/replay pointer contract. URI is the
+    # most redundant field for ordinary line-addressable evidence, so omit only
+    # that duplicated identity. A common SHA is also projected once at the
+    # envelope for compact inspection, while per-pointer SHA remains available
+    # to existing callers.
     digest = _sha(row.get("sha256"))
-    if digest is not None and digest != common_sha:
+    if digest is not None:
         item["sha256"] = digest
+    materialize_source = str(row.get("source_path") or row.get("source") or "").strip()
+    if materialize_source:
+        item["materialize_source"] = materialize_source
     if not has_ref:
         uri = str(row.get("uri") or "").strip()
         if uri:
@@ -102,9 +107,8 @@ def compact_shell_response(
     Core has already applied the user/Host Evidence token+byte gate to the
     complete final match set. MCP therefore returns every newly admitted pointer
     or a Core `too_broad` response. Pointer identity shared by the whole result
-    is carried once at the envelope so the MCP adapter does not spill ordinary
-    result sets to a temporary file merely because URI/SHA/source were repeated
-    for every row.
+    is carried once where possible so the MCP adapter does not spill ordinary
+    result sets merely because bulky URI text was repeated for every row.
     """
 
     result: dict[str, Any] = {
