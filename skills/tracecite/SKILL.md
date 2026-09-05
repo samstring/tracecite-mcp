@@ -96,6 +96,18 @@ projected/aggregate value != raw Evidence body
 
 For repeated-only results, use bounded representative receipts for orientation and exact coverage/count fields for scope. Previously seen Evidence remains recoverable through explicit materialize/replay.
 
+## Causal attribution discipline
+
+A suspicious error signature is not automatically the incident trigger. Before calling an observed event a process/container failure or the root cause, reconcile it with lifecycle continuity and the user-visible failure sequence.
+
+- Build the smallest supported causal sequence around the relevant interval: last healthy behavior → first observed failure → lifecycle transition if observed → recovery or continued failure.
+- A message that sounds process-fatal does not prove the active workload process died. If normal application activity continues across that message, process identity/lifecycle remains unresolved unless Evidence directly links the message to that same process instance.
+- Do not infer an orchestrator lifecycle state, restart policy, kill reason, or backoff mechanism from retry intervals alone. Require direct platform evidence or an unambiguous process/container lifecycle sequence.
+- Errors observed during shutdown, startup, or recovery can be consequences or side-process artifacts. Do not promote them to the initiating trigger without temporal and identity support.
+- Prefer the narrowest mechanism directly supported by Evidence. If telemetry proves shutdown/restart but not what initiated it, keep the external trigger unknown rather than guessing.
+
+These are generic evidence standards, not a prescribed investigation order. The Agent still chooses which hypotheses and fields to test.
+
 ## SourceVersion and citations
 
 A RetrievalSession fixes one SourceVersion per logical source. Keep the same session so later computations and exact reads refer to the same evidence world.
