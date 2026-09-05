@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from tracecite_mcp import server
 
 EXPECTED_TOOLS = {
     "tracecite_run",
+    "tracecite_analyze",
     "tracecite_retrieve",
     "tracecite_materialize",
     "tracecite_replay",
@@ -45,6 +47,7 @@ def test_agent_tool_schemas_do_not_expose_host_budget_or_snapshot_controls() -> 
     tools = _tools()
     run_schema = tools["tracecite_run"].input_schema
     run_text = str(run_schema)
+    analyze_text = str(tools["tracecite_analyze"].input_schema)
     for forbidden in (
         "max_evidence",
         "max_evidence_tokens",
@@ -55,6 +58,7 @@ def test_agent_tool_schemas_do_not_expose_host_budget_or_snapshot_controls() -> 
         "max_chars",
     ):
         assert forbidden not in run_text
+        assert forbidden not in analyze_text
 
     materialize_text = str(tools["tracecite_materialize"].input_schema)
     assert "max_chars" not in materialize_text
@@ -62,12 +66,17 @@ def test_agent_tool_schemas_do_not_expose_host_budget_or_snapshot_controls() -> 
     assert "max_chars" not in replay_text
 
 
-def test_tool_descriptions_teach_refine_not_budget_bypass() -> None:
+def test_tool_descriptions_teach_mechanics_not_investigation_strategy() -> None:
     tools = _tools()
     run = tools["tracecite_run"].description or ""
     assert "too_broad" in run
     assert "user/Host" in run
     assert "never ask" in run
+
+    analyze = tools["tracecite_analyze"].description or ""
+    assert "already decided" in analyze
+    assert "does not choose" in analyze
+    assert "causal reasoning" in analyze
 
     retrieve_desc = tools["tracecite_retrieve"].description or ""
     assert "prefer tracecite_run" in retrieve_desc
@@ -92,6 +101,37 @@ def test_run_uses_persistent_core_retrieval_session(tmp_path: Path) -> None:
     assert repeated["coverage"]["repeated_evidence"] >= 1
     assert repeated["mcp_session"]["revision"] > first["mcp_session"]["revision"]
     assert independent["evidence"]
+
+
+def test_analyze_batches_mechanical_aggregates_with_compact_projection(tmp_path: Path) -> None:
+    source = tmp_path / "traces.jsonl"
+    source.write_text(
+        "".join(
+            json.dumps(row, separators=(",", ":")) + "\n"
+            for row in [
+                {"service": "route", "status": 200},
+                {"service": "route", "status": 503},
+                {"service": "order", "status": 503},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = server.tracecite_analyze(
+        "investigation-a",
+        str(source),
+        [
+            {"name": "services", "program": "group service"},
+            {"name": "failures", "program": "where status >= 500 | count"},
+        ],
+    )
+
+    assert result["operation"] == "evidence_compute"
+    assert result["status"] == "ok"
+    assert result["mcp_session"]["session_id"] == "investigation-a"
+    assert result["data"]["execution_engine"] == "jsonl_shared_scan_batch"
+    assert len(result["data"]["outputs"]) == 2
+    assert all("evidence" not in output for output in result["data"]["outputs"])
 
 
 def test_same_session_keeps_fixed_source_version_when_original_changes(tmp_path: Path) -> None:
