@@ -25,6 +25,14 @@ def test_skill_distinguishes_literal_search_from_regex() -> None:
     assert "regex metacharacters inside `search`" in text
 
 
+def test_skill_batches_same_source_mechanical_checks() -> None:
+    text = _text()
+    assert "Do not fan out several parallel `tracecite_run` calls" in text
+    assert "collapse all already-chosen `count` / `group` / `distinct`" in text
+    assert "into one `tracecite_analyze` batch" in text
+    assert "defer those raw selections" in text
+
+
 def test_skill_requires_lifecycle_evidence_before_fault_attribution() -> None:
     text = _text()
     assert "A suspicious error signature is not automatically the incident trigger" in text
