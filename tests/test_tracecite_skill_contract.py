@@ -25,6 +25,15 @@ def test_skill_distinguishes_literal_search_from_regex() -> None:
     assert "regex metacharacters inside `search`" in text
 
 
+def test_skill_requires_lifecycle_evidence_before_fault_attribution() -> None:
+    text = _text()
+    assert "A suspicious error signature is not automatically the incident trigger" in text
+    assert "normal application activity continues across that message" in text
+    assert "Do not infer an orchestrator lifecycle state" in text
+    assert "retry intervals alone" in text
+    assert "keep the external trigger unknown rather than guessing" in text
+
+
 def test_skill_guidance_is_not_benchmark_or_fault_specific() -> None:
     lowered = _text().lower()
     for forbidden in (
