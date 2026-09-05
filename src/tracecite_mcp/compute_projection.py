@@ -41,6 +41,17 @@ def _compact_output(value: Any) -> dict[str, Any] | None:
     return result
 
 
+def _compact_time_scope(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    result = {
+        key: value.get(key)
+        for key in ("last", "since", "until")
+        if key in value
+    }
+    return result or None
+
+
 def compact_compute_response(
     payload: Mapping[str, Any],
     *,
@@ -75,6 +86,9 @@ def compact_compute_response(
             "observed_at_least_tokens",
             "observed_at_least_bytes",
         )
+        time_scope = _compact_time_scope(data.get("time_scope"))
+        if time_scope is not None:
+            compact_data["time_scope"] = time_scope
         if compact_data:
             result["data"] = compact_data
 
