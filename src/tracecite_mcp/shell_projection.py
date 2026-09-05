@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Mapping
 
 
@@ -44,13 +43,25 @@ def _compact_pointer(row: Mapping[str, Any], display_source: str) -> dict[str, A
     if label is not None:
         item["preview"] = _preview(label)
 
-    # Search citations should display the logical caller source, while exact
-    # materialization must target the immutable snapshot/segment selected by
-    # SessionSourceView when it differs from the logical path.
-    materialize_source = str(row.get("source_path") or "").strip()
+    materialize_source = str(row.get("source_path") or row.get("source") or "").strip()
     if materialize_source:
         item["materialize_source"] = materialize_source
     return item
+
+
+def _compact_existing_summary(value: Mapping[str, Any], display_source: str) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key in ("count", "all_matches_previously_seen", "replay_hint"):
+        if key in value:
+            result[key] = value[key]
+    representative = value.get("representative")
+    if isinstance(representative, (list, tuple)):
+        result["representative"] = [
+            _compact_pointer(row, display_source)
+            for row in representative
+            if isinstance(row, Mapping)
+        ]
+    return result
 
 
 def compact_shell_response(
@@ -61,8 +72,9 @@ def compact_shell_response(
     """Project one Evidence Shell result without a second first-N truncation.
 
     Core has already applied the user/Host Evidence token+byte gate to the
-    complete final match set. MCP therefore returns every admitted pointer or a
-    Core `too_broad` response; it never silently drops a suffix of pointers.
+    complete final match set. MCP therefore returns every newly admitted pointer
+    or a Core `too_broad` response. Previously seen matches may be represented by
+    a bounded compatibility receipt plus an exact repeated count.
     """
 
     result: dict[str, Any] = {
@@ -70,6 +82,8 @@ def compact_shell_response(
         "status": str(payload.get("status") or "unknown"),
         "source": display_source,
     }
+    if payload.get("error_code") is not None:
+        result["error_code"] = payload.get("error_code")
     if payload.get("error") is not None:
         result["error"] = payload.get("error")
     if payload.get("warnings"):
@@ -96,7 +110,6 @@ def compact_shell_response(
 
     evidence = payload.get("evidence")
     if isinstance(evidence, (list, tuple)):
-        # No MCP row cap here. The Runtime budget gate is authoritative.
         result["evidence"] = [
             _compact_pointer(row, display_source)
             for row in evidence
@@ -108,26 +121,32 @@ def compact_shell_response(
         compact_data: dict[str, Any] = {}
         for key in (
             "program",
+            "requested_program",
+            "normalized_program",
             "source_version",
             "aggregate",
             "reason",
             "refine_query",
             "novelty",
             "evidence_budget",
+            "supported_hint",
         ):
             if key in data and data[key] is not None:
                 compact_data[key] = data[key]
+
         repeated = data.get("matched_existing_evidence")
         if isinstance(repeated, (list, tuple)) and repeated:
             compact_data["matched_existing_evidence"] = [
-                {
-                    key: row[key]
-                    for key in ("uri", "start_line", "end_line", "sha256")
-                    if key in row
-                }
+                _compact_pointer(row, display_source)
                 for row in repeated
                 if isinstance(row, Mapping)
             ]
+
+        existing_summary = data.get("existing_evidence_summary")
+        if isinstance(existing_summary, Mapping):
+            compact_data["existing_evidence_summary"] = _compact_existing_summary(
+                existing_summary, display_source
+            )
         if compact_data:
             result["data"] = compact_data
 
