@@ -43,7 +43,7 @@ Do not spend investigation turns discovering container-specific absolute paths. 
 
 ## Evidence Shell
 
-`tracecite_run` accepts familiar read-only Unix-like search spelling, but it does **not** execute arbitrary host bash. Common `grep`, `head`, and `tail` forms are normalized into TraceCite's controlled Record pipeline, so the same SourceVersion, provenance, novelty and Evidence budget rules always apply.
+`tracecite_run` accepts familiar read-only Unix-like data-query spelling, but it does **not** execute arbitrary host bash. Common `grep`, `rg`, `head`, `tail`, `wc -l`, `sort`, `uniq`, selected `sed -n`, and simple `jq` forms are normalized into TraceCite's controlled Record pipeline, so the same SourceVersion, logical-Record, provenance, novelty and Evidence-budget rules always apply.
 
 ```text
 Agent program
@@ -58,14 +58,14 @@ search/filter/aggregate/navigation stages remain Runtime-side
     ↓
 User/Host Evidence budget gate
     ↓
-complete admitted pointer set OR status=too_broad
+complete admitted pointer set OR bounded derived result OR status=too_broad
 ```
 
-Commands are pipe-composable with `|`.
+Commands are pipe-composable with `|` when the mapped TraceCite stage is composable. Aggregate/projection stages remain terminal.
 
-### Familiar grep syntax
+### Familiar grep / rg syntax
 
-The common forms below are accepted, including combined short flags:
+Common `grep` forms are accepted, including combined short flags:
 
 ```text
 grep TEXT
@@ -89,9 +89,22 @@ grep --max-count N PATTERN
 
 Default `grep` follows the common basic-regex expectation, so escaped alternation such as `grep 'error\|failed'` works. Use `-E` for extended regex and `-F` when regex metacharacters must stay literal.
 
-`grep -c` becomes a Runtime-side count aggregate: the matching record bodies do not cross into model context. `-m N` selects the first N matches and therefore intentionally changes completeness semantics.
+`rg` uses regex semantics by default and supports the common investigation flags below:
 
-Familiar selection spellings also work:
+```text
+rg REGEX
+rg -i REGEX
+rg -F TEXT
+rg -v REGEX
+rg -c REGEX
+rg -n REGEX
+rg -e REGEX
+rg -m N REGEX
+```
+
+For both commands, `-c` becomes a Runtime-side count aggregate. `-m N` intentionally selects the first N matches and changes completeness semantics.
+
+### Familiar count / selection / transform syntax
 
 ```text
 head 30
@@ -100,7 +113,37 @@ head -n 30
 tail 30
 tail -30
 tail -n 30
+wc -l
+wc --lines
+sort
+sort -r
+sort -n
+sort -nr
+sort -rn
+uniq
+uniq -c
+sed -n '100p'
+sed -n '100,150p'
 ```
+
+Unix-style `sort` without a field sorts complete Record text. Numeric mode is intentionally limited to numeric Record text; for structured values prefer native `sort FIELD [asc|desc] [numeric]`.
+
+`uniq` maps to distinct complete Record text and `uniq -c` maps to grouped Record-text counts. Because TraceCite aggregates are terminal, do not append another stage after `uniq`/`uniq -c`; use native `group FIELD` when structured grouping is clearer.
+
+`sed` compatibility is intentionally limited to read-only line selection. Other sed scripts are not executed.
+
+### Simple jq compatibility
+
+Simple structured filtering/projection can use familiar jq spelling:
+
+```text
+jq 'select(.statusCode >= 500)'
+jq 'select(.serviceName == "route")'
+jq -r '.serviceName'
+jq 'select(.statusCode >= 500) | .serviceName'
+```
+
+Supported `select` comparisons are `==`, `!=`, `>`, `>=`, `<`, and `<=` on dotted fields. A field projection maps to terminal `project FIELD`; it returns a bounded derived projection with source/SHA/line provenance for each row, not raw Evidence bodies. Complex jq programs are intentionally not emulated.
 
 ### TraceCite-native search/filter
 
@@ -125,12 +168,12 @@ missing FIELD
 lines START [END]
 ```
 
-`FIELD` can be a Segmenter/JSON field, dotted nested field, `timestamp`, `source`, `line`/`start_line`, or `end_line`.
+`FIELD` can be a Segmenter/JSON field, dotted nested field, `timestamp`, `source`, `text`, `line`/`start_line`, or `end_line`.
 
 ### Transform/select
 
 ```text
-sort FIELD [asc|desc]
+sort FIELD [asc|desc] [numeric]
 reverse
 take N
 head N
@@ -144,16 +187,17 @@ seek LINE [BEFORE] [AFTER]
 
 `take/head/first/last/tail` intentionally change query semantics. Do not add them merely to bypass `too_broad` unless a subset is actually the question being asked.
 
-### Aggregate
+### Aggregate / derived projection
 
 ```text
 count
 group FIELD
 distinct FIELD
 uniq FIELD
+project FIELD
 ```
 
-Prefer aggregate stages when the intermediate match set is large but the fact needed is small.
+Prefer aggregate stages when the intermediate match set is large but the fact needed is small. `project FIELD` is terminal and returns derived values plus provenance. It does not turn transformed values into raw Evidence.
 
 ### Compose work into one call
 
@@ -161,6 +205,10 @@ Prefer one pipeline when you already know the mechanical narrowing steps. Do not
 
 ```text
 grep -Ei 'panic|fatal|error|failed' | grep -i 'runtime' | head -30
+```
+
+```text
+rg -i 'panic|fatal|error|failed' | wc -l
 ```
 
 ```text
@@ -177,7 +225,7 @@ search 'request_id=abc' | near line=94771 before=3 after=5
 
 Time/format scope can be passed to `tracecite_run` with `last`, `since`, `until`, and `segmenter`.
 
-If a familiar Unix option is not supported, use the error to rewrite that stage with `search`, `regex`, `where`, `count`, `head` or another documented TraceCite stage. Do not switch to native shell access for a TraceCite-only evidence file.
+If a familiar Unix option is not supported, use the error to rewrite that stage with `search`, `regex`, `where`, `count`, `group`, `project`, `head` or another documented TraceCite stage. Do not switch to native shell access for a TraceCite-only evidence file.
 
 ## `too_broad`
 
@@ -191,9 +239,9 @@ data.refine_query = true
 evidence = []
 ```
 
-An aggregate can similarly exceed its own transport budget.
+An aggregate or derived projection can similarly exceed its own transport budget.
 
-When this happens, refine by adding more selective literals/regex/field predicates, narrowing time or line scope, or changing the question to an aggregate. Do not change the budget.
+When this happens, refine by adding more selective literals/regex/field predicates, narrowing time or line scope, or changing the question to a compact aggregate. Do not change the budget.
 
 ## SourceVersion / session stability
 
@@ -222,7 +270,7 @@ Each shell Evidence row may contain:
 
 For final reasoning/citation, call `tracecite_materialize` with the row's `materialize_source`, exact line/range and SHA when available. The Agent may choose `before`/`after`, but the maximum returned Evidence size remains a User/Host limit and is not an Agent argument.
 
-Materialized raw text is Evidence. An unmaterialized preview/pointer is a navigation candidate, not surrounding context you have already inspected.
+Materialized raw text is Evidence. An unmaterialized preview/pointer or projected value is a navigation/derived result, not surrounding raw context you have already inspected.
 
 ## Compatibility surfaces
 
@@ -243,6 +291,7 @@ repeated_evidence>0       != useless evidence
 coverage.complete         != causal chain complete
 integrity verified        != causal conclusion verified
 status=too_broad          != no evidence exists
+projected/aggregate value != raw Evidence body
 ```
 
 TraceCite reports mechanical facts. The Agent decides what they mean.
