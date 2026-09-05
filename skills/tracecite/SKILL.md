@@ -108,6 +108,25 @@ A suspicious error signature is not automatically the incident trigger. Before c
 
 These are generic evidence standards, not a prescribed investigation order. The Agent still chooses which hypotheses and fields to test.
 
+## Sufficiency checkpoint and stopping discipline
+
+Evidence quality does not improve merely because more tool calls are possible. Re-evaluate sufficiency whenever a material causal-chain claim becomes supported or contradicted.
+
+Stop gathering new Evidence and answer when all claims the task actually requires can already be made at an evidence-supported specificity, including appropriate uncertainty. In particular:
+
+- the responsible entity or component is supported strongly enough for the requested conclusion;
+- the concrete mechanism/fault type is supported at the narrowest defensible level;
+- the causal chain needed by the task is supported by direct observations and clearly labeled inference;
+- material counterevidence has been reconciled or explicitly left unresolved;
+- exact Evidence needed for the final citations has already been selected/materialized;
+- remaining unknowns would only make the explanation more specific, not change the supported responsible entity, mechanism, causal chain, or evidence boundary.
+
+Once the supplied Evidence establishes the requested mechanism but does not expose a more upstream trigger, state that boundary and finish. Do **not** keep searching unrelated sources merely to invent or name an unobserved trigger, unless the user explicitly requires that upstream trigger or new contradictory Evidence could change the conclusion.
+
+Before issuing another tool call after a plausible answer is already supported, ask what decision that call could change. If it cannot change the responsible entity, mechanism, causal chain, uncertainty boundary, or citation completeness, do not issue it.
+
+This checkpoint controls investigation cost; it does not lower the evidentiary standard and does not prescribe which hypothesis should win.
+
 ## SourceVersion and citations
 
 A RetrievalSession fixes one SourceVersion per logical source. Keep the same session so later computations and exact reads refer to the same evidence world.
