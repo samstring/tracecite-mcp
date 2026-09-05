@@ -77,6 +77,65 @@ def _compact_pointer(
     return item
 
 
+def _compact_project_row(
+    row: Mapping[str, Any],
+    display_source: str,
+    *,
+    common_sha: str | None,
+) -> dict[str, Any]:
+    """Project one derived FIELD value without repeating source identity."""
+
+    item: dict[str, Any] = {"value": row.get("value")}
+    start = row.get("start_line")
+    end = row.get("end_line")
+    if isinstance(start, int) and not isinstance(start, bool) and start > 0:
+        if not isinstance(end, int) or isinstance(end, bool) or end < start:
+            end = start
+        item["ref"] = f"{_source_name(display_source)}:L{start}" + (
+            f"-L{end}" if end > start else ""
+        )
+        item["start_line"] = start
+        item["end_line"] = end
+    digest = _sha(row.get("sha256"))
+    if digest is not None and digest != common_sha:
+        item["sha256"] = digest
+    return item
+
+
+def _compact_aggregate(
+    value: Mapping[str, Any],
+    display_source: str,
+    *,
+    common_sha: str | None,
+) -> dict[str, Any]:
+    """Keep aggregate facts while removing repeated per-row provenance bulk."""
+
+    result: dict[str, Any] = {}
+    for key in (
+        "field",
+        "count",
+        "row_total",
+        "group_total",
+        "groups_returned",
+        "distinct_total",
+        "values_returned",
+    ):
+        if key in value:
+            result[key] = value[key]
+    if isinstance(value.get("groups"), (list, tuple)):
+        result["groups"] = list(value.get("groups") or ())
+    if isinstance(value.get("values"), (list, tuple)):
+        result["values"] = list(value.get("values") or ())
+    rows = value.get("rows")
+    if isinstance(rows, (list, tuple)):
+        result["rows"] = [
+            _compact_project_row(row, display_source, common_sha=common_sha)
+            for row in rows
+            if isinstance(row, Mapping)
+        ]
+    return result
+
+
 def _compact_existing_summary(
     value: Mapping[str, Any],
     display_source: str,
@@ -108,7 +167,7 @@ def compact_shell_response(
     complete final match set. MCP therefore returns every newly admitted pointer
     or a Core `too_broad` response. Pointer identity shared by the whole result
     is carried once where possible so the MCP adapter does not spill ordinary
-    result sets merely because bulky URI text was repeated for every row.
+    result sets merely because bulky URI/source/SHA text was repeated per row.
     """
 
     result: dict[str, Any] = {
@@ -143,11 +202,17 @@ def compact_shell_response(
             result["coverage"] = compact
 
     evidence = payload.get("evidence")
-    evidence_rows = [row for row in evidence or () if isinstance(row, Mapping)] if isinstance(evidence, (list, tuple)) else []
+    evidence_rows = (
+        [row for row in evidence or () if isinstance(row, Mapping)]
+        if isinstance(evidence, (list, tuple))
+        else []
+    )
 
     data = payload.get("data")
     repeated_rows: list[Mapping[str, Any]] = []
     representative_rows: list[Mapping[str, Any]] = []
+    aggregate_rows: list[Mapping[str, Any]] = []
+    aggregate_value: Mapping[str, Any] | None = None
     if isinstance(data, Mapping):
         repeated = data.get("matched_existing_evidence")
         if isinstance(repeated, (list, tuple)):
@@ -157,8 +222,16 @@ def compact_shell_response(
             representative = existing_summary.get("representative")
             if isinstance(representative, (list, tuple)):
                 representative_rows = [row for row in representative if isinstance(row, Mapping)]
+        raw_aggregate = data.get("aggregate")
+        if isinstance(raw_aggregate, Mapping):
+            aggregate_value = raw_aggregate
+            rows = raw_aggregate.get("rows")
+            if isinstance(rows, (list, tuple)):
+                aggregate_rows = [row for row in rows if isinstance(row, Mapping)]
 
-    common_sha = _common_sha(evidence_rows + repeated_rows + representative_rows)
+    common_sha = _common_sha(
+        evidence_rows + repeated_rows + representative_rows + aggregate_rows
+    )
     if common_sha is not None:
         result["source_sha256"] = common_sha
 
@@ -175,7 +248,6 @@ def compact_shell_response(
             "requested_program",
             "normalized_program",
             "source_version",
-            "aggregate",
             "reason",
             "refine_query",
             "novelty",
@@ -184,6 +256,13 @@ def compact_shell_response(
         ):
             if key in data and data[key] is not None:
                 compact_data[key] = data[key]
+
+        if aggregate_value is not None:
+            compact_data["aggregate"] = _compact_aggregate(
+                aggregate_value,
+                display_source,
+                common_sha=common_sha,
+            )
 
         if repeated_rows:
             compact_data["matched_existing_evidence"] = [
