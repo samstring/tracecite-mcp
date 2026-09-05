@@ -34,6 +34,16 @@ def test_skill_requires_lifecycle_evidence_before_fault_attribution() -> None:
     assert "keep the external trigger unknown rather than guessing" in text
 
 
+def test_skill_stops_after_requested_causal_claims_are_sufficient() -> None:
+    text = _text()
+    assert "## Sufficiency checkpoint and stopping discipline" in text
+    assert "Stop gathering new Evidence and answer" in text
+    assert "remaining unknowns would only make the explanation more specific" in text
+    assert "state that boundary and finish" in text
+    assert "ask what decision that call could change" in text
+    assert "does not lower the evidentiary standard" in text
+
+
 def test_skill_guidance_is_not_benchmark_or_fault_specific() -> None:
     lowered = _text().lower()
     for forbidden in (
