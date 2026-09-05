@@ -19,7 +19,8 @@ TraceCite is an Evidence Runtime, not a planner or root-cause oracle. The Agent 
 8. When `novelty.query_repeated=true`, do not issue the same query again.
 9. When all matches were previously seen, TraceCite returns an exact repeated count plus at most two representative receipts. Old Evidence remains recoverable with `tracecite_materialize`/`tracecite_replay`; do not request a complete repeated-locator dump.
 10. If the evidence already establishes the root component and causal chain but the remaining lower-level mechanism is not observable in the supplied telemetry, state that evidence boundary and answer. Do not keep issuing equivalent searches merely to force a more specific conclusion.
-11. Do not use native grep/read on a TraceCite-only evidence source.
+11. Before promoting an error, warning, configuration defect, or resource anomaly to the incident root cause, test temporal contrast. Check whether the same signal is present during a clearly healthy period before the incident and whether it persists after recovery. A signal that is materially unchanged across healthy and faulty periods is background evidence unless another observation shows an incident-correlated change or causal mechanism.
+12. Do not use native grep/read on a TraceCite-only evidence source.
 
 ## Preferred tools
 
@@ -143,6 +144,25 @@ instead of repeatedly issuing equivalent broad searches and inspecting each resu
 
 A scalar count may scan an arbitrarily large Runtime-internal set while returning only the scalar. Familiar no-op spelling such as `grep -c PATTERN | head 5` is accepted as the same scalar count.
 
+## Causal contrast before attribution
+
+Finding a severe-looking message is not enough to call it the root cause. Before promoting a recurring signal, compare at least one healthy period against the incident period when the data permits it.
+
+Useful checks include:
+
+```text
+# Is the candidate signal already present before the incident?
+search CANDIDATE | sort timestamp asc | head 3
+
+# Does it remain after the service has recovered?
+search CANDIDATE | sort timestamp desc | head 3
+
+# Did frequency/severity materially change near the incident?
+search CANDIDATE | group container_name
+```
+
+If the same warning/configuration defect occurs while the service is demonstrably healthy before and after the outage, treat it as a background defect unless there is separate evidence that its state, frequency, severity, or causal effect changed at the incident. Prefer a narrower evidence-boundary statement over attaching the incident to an attractive but non-discriminating error message.
+
 ## Program errors
 
 Unsupported read-only syntax returns a normal tool result:
@@ -199,6 +219,7 @@ coverage.complete         != causal chain complete
 integrity verified        != causal conclusion verified
 status=too_broad          != no evidence exists
 projected/aggregate value != raw Evidence body
+healthy-before-and-after  -> candidate signal is non-discriminating unless another causal change is shown
 ```
 
 TraceCite reports mechanical facts. The Agent decides what they mean, and must keep conclusion precision within the precision supported by the evidence.
