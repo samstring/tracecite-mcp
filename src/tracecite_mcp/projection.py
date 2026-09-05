@@ -41,7 +41,10 @@ def _copy_present(source: Mapping[str, Any], target: dict[str, Any], *keys: str)
 
 
 def _copy_recovery_metadata(source: Mapping[str, Any], target: dict[str, Any]) -> None:
-    _copy_present(source, target, "error_code")
+    # Error guidance is intentionally small and mechanical. Keeping it at the
+    # transport boundary prevents MCP adapters from reducing a useful semantic
+    # failure to a generic parameter error that makes the Agent retry blindly.
+    _copy_present(source, target, "error_code", "guidance")
     available = source.get("available_sources")
     if isinstance(available, (list, tuple)):
         values = [str(item) for item in available[:_MAX_AVAILABLE_SOURCES]]
