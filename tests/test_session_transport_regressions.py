@@ -29,7 +29,7 @@ def test_host_pinned_session_absorbs_agent_session_churn(
     assert repeated["coverage"]["repeated_evidence"] >= 1
 
 
-def test_shell_projection_keeps_all_pointers_without_repeating_identity() -> None:
+def test_shell_projection_keeps_all_pointers_without_repeating_uri_text() -> None:
     digest = "a" * 64
     evidence = [
         {
@@ -65,8 +65,8 @@ def test_shell_projection_keeps_all_pointers_without_repeating_identity() -> Non
 
     assert len(result["evidence"]) == 10
     assert result["source_sha256"] == digest
-    assert all("sha256" not in row for row in result["evidence"])
+    assert all(row["sha256"] == digest for row in result["evidence"])
     assert all("uri" not in row for row in result["evidence"])
-    assert all("materialize_source" not in row for row in result["evidence"])
+    assert all(row["materialize_source"] == "/tmp/evidence/logs.jsonl" for row in result["evidence"])
     assert all(len(row.get("preview", "")) <= 180 for row in result["evidence"])
     assert len(encoded.encode("utf-8")) < 8_000
