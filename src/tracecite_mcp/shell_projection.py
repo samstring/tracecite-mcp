@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
-_PREVIEW_CHARS = 420
+_PREVIEW_CHARS = 180
 
 
 def _source_name(value: Any) -> str:
@@ -21,11 +21,32 @@ def _preview(value: Any) -> str:
     return f"{text[:head]} ... {text[-(_PREVIEW_CHARS - 5 - head):]}"
 
 
-def _compact_pointer(row: Mapping[str, Any], display_source: str) -> dict[str, Any]:
+def _sha(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if len(text) == 64 and all(ch in "0123456789abcdef" for ch in text):
+        return text
+    return None
+
+
+def _common_sha(rows: list[Mapping[str, Any]]) -> str | None:
+    values = {_sha(row.get("sha256")) for row in rows}
+    values.discard(None)
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def _compact_pointer(
+    row: Mapping[str, Any],
+    display_source: str,
+    *,
+    common_sha: str | None,
+) -> dict[str, Any]:
+    """Keep one line-addressable pointer without repeating envelope identity."""
+
     item: dict[str, Any] = {}
     start = row.get("start_line")
     end = row.get("end_line")
-    if isinstance(start, int) and not isinstance(start, bool) and start > 0:
+    has_ref = isinstance(start, int) and not isinstance(start, bool) and start > 0
+    if has_ref:
         if not isinstance(end, int) or isinstance(end, bool) or end < start:
             end = start
         item["ref"] = f"{_source_name(display_source)}:L{start}" + (
@@ -33,23 +54,30 @@ def _compact_pointer(row: Mapping[str, Any], display_source: str) -> dict[str, A
         )
         item["start_line"] = start
         item["end_line"] = end
-    uri = str(row.get("uri") or "").strip()
-    if uri:
-        item["uri"] = uri
-    sha = str(row.get("sha256") or "").strip()
-    if sha:
-        item["sha256"] = sha
+
+    # The request envelope already carries the logical source, and a common SHA
+    # is projected once for the whole result. Keep per-row identity only when it
+    # cannot be reconstructed from that envelope.
+    digest = _sha(row.get("sha256"))
+    if digest is not None and digest != common_sha:
+        item["sha256"] = digest
+    if not has_ref:
+        uri = str(row.get("uri") or "").strip()
+        if uri:
+            item["uri"] = uri
+
     label = row.get("label")
     if label is not None:
         item["preview"] = _preview(label)
-
-    materialize_source = str(row.get("source_path") or row.get("source") or "").strip()
-    if materialize_source:
-        item["materialize_source"] = materialize_source
     return item
 
 
-def _compact_existing_summary(value: Mapping[str, Any], display_source: str) -> dict[str, Any]:
+def _compact_existing_summary(
+    value: Mapping[str, Any],
+    display_source: str,
+    *,
+    common_sha: str | None,
+) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key in ("count", "all_matches_previously_seen", "replay_hint"):
         if key in value:
@@ -57,7 +85,7 @@ def _compact_existing_summary(value: Mapping[str, Any], display_source: str) -> 
     representative = value.get("representative")
     if isinstance(representative, (list, tuple)):
         result["representative"] = [
-            _compact_pointer(row, display_source)
+            _compact_pointer(row, display_source, common_sha=common_sha)
             for row in representative
             if isinstance(row, Mapping)
         ]
@@ -73,8 +101,10 @@ def compact_shell_response(
 
     Core has already applied the user/Host Evidence token+byte gate to the
     complete final match set. MCP therefore returns every newly admitted pointer
-    or a Core `too_broad` response. Previously seen matches may be represented by
-    a bounded compatibility receipt plus an exact repeated count.
+    or a Core `too_broad` response. Pointer identity shared by the whole result
+    is carried once at the envelope so the MCP adapter does not spill ordinary
+    result sets to a temporary file merely because URI/SHA/source were repeated
+    for every row.
     """
 
     result: dict[str, Any] = {
@@ -109,14 +139,31 @@ def compact_shell_response(
             result["coverage"] = compact
 
     evidence = payload.get("evidence")
-    if isinstance(evidence, (list, tuple)):
-        result["evidence"] = [
-            _compact_pointer(row, display_source)
-            for row in evidence
-            if isinstance(row, Mapping)
-        ]
+    evidence_rows = [row for row in evidence or () if isinstance(row, Mapping)] if isinstance(evidence, (list, tuple)) else []
 
     data = payload.get("data")
+    repeated_rows: list[Mapping[str, Any]] = []
+    representative_rows: list[Mapping[str, Any]] = []
+    if isinstance(data, Mapping):
+        repeated = data.get("matched_existing_evidence")
+        if isinstance(repeated, (list, tuple)):
+            repeated_rows = [row for row in repeated if isinstance(row, Mapping)]
+        existing_summary = data.get("existing_evidence_summary")
+        if isinstance(existing_summary, Mapping):
+            representative = existing_summary.get("representative")
+            if isinstance(representative, (list, tuple)):
+                representative_rows = [row for row in representative if isinstance(row, Mapping)]
+
+    common_sha = _common_sha(evidence_rows + repeated_rows + representative_rows)
+    if common_sha is not None:
+        result["source_sha256"] = common_sha
+
+    if isinstance(evidence, (list, tuple)):
+        result["evidence"] = [
+            _compact_pointer(row, display_source, common_sha=common_sha)
+            for row in evidence_rows
+        ]
+
     if isinstance(data, Mapping):
         compact_data: dict[str, Any] = {}
         for key in (
@@ -134,18 +181,18 @@ def compact_shell_response(
             if key in data and data[key] is not None:
                 compact_data[key] = data[key]
 
-        repeated = data.get("matched_existing_evidence")
-        if isinstance(repeated, (list, tuple)) and repeated:
+        if repeated_rows:
             compact_data["matched_existing_evidence"] = [
-                _compact_pointer(row, display_source)
-                for row in repeated
-                if isinstance(row, Mapping)
+                _compact_pointer(row, display_source, common_sha=common_sha)
+                for row in repeated_rows
             ]
 
         existing_summary = data.get("existing_evidence_summary")
         if isinstance(existing_summary, Mapping):
             compact_data["existing_evidence_summary"] = _compact_existing_summary(
-                existing_summary, display_source
+                existing_summary,
+                display_source,
+                common_sha=common_sha,
             )
         if compact_data:
             result["data"] = compact_data
