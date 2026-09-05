@@ -9,150 +9,61 @@ TraceCite is an Evidence Runtime, not a planner or root-cause oracle. The Agent 
 
 ## Core rules
 
-1. Reuse one `session_id` for the entire conversation/investigation.
-2. For text evidence, prefer `tracecite_run` over multiple `tracecite_retrieve`/aggregate calls.
-3. Put all mechanical narrowing that can be decided in advance into one pipe-composed Evidence Shell program. Intermediate rows remain inside Runtime and do not enter model context.
-4. Evidence token/byte limits are User/Host policy. They are not Agent parameters.
-5. If TraceCite returns `status=too_broad`, change the search method. Never ask to increase a budget, invent a larger limit, request a complete locator dump, or treat arbitrary first-N truncation as a complete search.
-6. After the final candidate set is small, materialize only the few records needed for reasoning/citation.
-7. Repeated Evidence may be returned only as lightweight identities. `no_new_evidence` means no new Evidence identity was exposed, not that a hypothesis is proven or the investigation is complete.
-8. Do not use native grep/read on a TraceCite-only evidence source.
+1. Reuse one `session_id` for the whole investigation.
+2. For text evidence, prefer `tracecite_run`.
+3. Put mechanical narrowing/aggregation that is already known into one pipe-composed program. Intermediate rows remain Runtime-side.
+4. Evidence token/byte limits are User/Host policy, never Agent parameters.
+5. If `status=too_broad`, make the query more selective or ask for a compact aggregate. Never enlarge the budget or use arbitrary first-N as a fake complete search.
+6. Materialize only the few exact records needed for reasoning/citation.
+7. `no_new_evidence` means the current query exposed no new Evidence identity. It does not prove a hypothesis or end the whole investigation.
+8. When `novelty.query_repeated=true`, do not issue the same query again.
+9. When all matches were previously seen, TraceCite returns an exact repeated count plus at most two representative receipts. Old Evidence remains recoverable with `tracecite_materialize`/`tracecite_replay`; do not request a complete repeated-locator dump.
+10. If the evidence already establishes the root component and causal chain but the remaining lower-level mechanism is not observable in the supplied telemetry, state that evidence boundary and answer. Do not keep issuing equivalent searches merely to force a more specific conclusion.
+11. Do not use native grep/read on a TraceCite-only evidence source.
 
 ## Preferred tools
 
 | Need | Tool |
 | --- | --- |
-| Search/filter/aggregate/navigate text evidence | `tracecite_run` |
-| Exact context for selected EvidencePointer | `tracecite_materialize` |
+| Search/filter/aggregate/navigate text | `tracecite_run` |
+| Exact context for a selected pointer | `tracecite_materialize` |
 | Intentional reread of covered immutable evidence | `tracecite_replay` |
-| Legacy query/source/provider compatibility | `tracecite_retrieve` |
+| Legacy source/provider compatibility | `tracecite_retrieve` |
 | Legacy count compatibility | `tracecite_aggregate` |
 | Provider/entity traversal | `tracecite_traverse` |
-| Manifest/integrity check | `tracecite_verify` |
-
-Installed extensions may add domain tools such as mobile capabilities. Those are explicit Core capabilities, not Evidence Shell commands.
-
-## Evidence source names
-
-For `source`, use either:
-
-- an exact Host-allowed path returned by TraceCite; or
-- a unique relative logical name such as `app.log` when that name resolves to exactly one Host-authorized evidence file.
-
-Do not spend investigation turns discovering container-specific absolute paths. TraceCite resolves a unique logical name inside the Host evidence roots/inventory. If a logical name is missing or ambiguous, use the structured source error / `available_sources` to select an exact allowed path.
+| Integrity/manifest check | `tracecite_verify` |
 
 ## Evidence Shell
 
-`tracecite_run` accepts familiar read-only Unix-like data-query spelling, but it does **not** execute arbitrary host bash. Common `grep`, `rg`, `head`, `tail`, `wc -l`, `sort`, `uniq`, selected `sed -n`, and simple `jq` forms are normalized into TraceCite's controlled Record pipeline, so the same SourceVersion, logical-Record, provenance, novelty and Evidence-budget rules always apply.
+`tracecite_run` accepts familiar read-only Unix-like query spelling but never executes host bash. Common `grep`, `rg`, `head`, `tail`, `wc -l`, `sort`, `uniq`, selected `sed -n`, simple `jq`, and TraceCite-native stages are normalized into a controlled Record pipeline.
 
 ```text
 Agent program
-    ↓
-fixed SessionSourceView / SourceVersion
-    ↓
-raw search hit
-    ↓
-Segmenter restores complete logical Record
-    ↓
-search/filter/aggregate/navigation stages remain Runtime-side
-    ↓
-User/Host Evidence budget gate
-    ↓
-complete admitted pointer set OR bounded derived result OR status=too_broad
+  -> fixed SessionSourceView / SourceVersion
+  -> raw hit scan
+  -> Segmenter restores complete logical Record
+  -> filters/transforms/aggregates stay Runtime-side
+  -> User/Host Evidence budget gate
+  -> admitted Evidence pointers, bounded derived result, or too_broad
 ```
 
-Commands are pipe-composable with `|` when the mapped TraceCite stage is composable. Aggregate/projection stages remain terminal.
-
-### Familiar grep / rg syntax
-
-Common `grep` forms are accepted, including combined short flags:
+### Search/filter
 
 ```text
+search TEXT
+regex REGEX
 grep TEXT
 grep -i TEXT
 grep -E REGEX
 grep -F TEXT
 grep -v TEXT
 grep -c TEXT
-grep -Ei REGEX
-grep -ic TEXT
-grep -n TEXT
-grep -e PATTERN
-grep -m N PATTERN
-grep --ignore-case TEXT
-grep --extended-regexp REGEX
-grep --fixed-strings TEXT
-grep --invert-match TEXT
-grep --count TEXT
-grep --max-count N PATTERN
-```
-
-Default `grep` follows the common basic-regex expectation, so escaped alternation such as `grep 'error\|failed'` works. Use `-E` for extended regex and `-F` when regex metacharacters must stay literal.
-
-`rg` uses regex semantics by default and supports the common investigation flags below:
-
-```text
+grep -m N TEXT
 rg REGEX
 rg -i REGEX
 rg -F TEXT
 rg -v REGEX
 rg -c REGEX
-rg -n REGEX
-rg -e REGEX
-rg -m N REGEX
-```
-
-For both commands, `-c` becomes a Runtime-side count aggregate. `-m N` intentionally selects the first N matches and changes completeness semantics.
-
-### Familiar count / selection / transform syntax
-
-```text
-head 30
-head -30
-head -n 30
-tail 30
-tail -30
-tail -n 30
-wc -l
-wc --lines
-sort
-sort -r
-sort -n
-sort -nr
-sort -rn
-uniq
-uniq -c
-sed -n '100p'
-sed -n '100,150p'
-```
-
-Unix-style `sort` without a field sorts complete Record text. Numeric mode is intentionally limited to numeric Record text; for structured values prefer native `sort FIELD [asc|desc] [numeric]`.
-
-`uniq` maps to distinct complete Record text and `uniq -c` maps to grouped Record-text counts. Because TraceCite aggregates are terminal, do not append another stage after `uniq`/`uniq -c`; use native `group FIELD` when structured grouping is clearer.
-
-`sed` compatibility is intentionally limited to read-only line selection. Other sed scripts are not executed.
-
-### Simple jq compatibility
-
-Simple structured filtering/projection can use familiar jq spelling:
-
-```text
-jq 'select(.statusCode >= 500)'
-jq 'select(.serviceName == "route")'
-jq -r '.serviceName'
-jq 'select(.statusCode >= 500) | .serviceName'
-```
-
-Supported `select` comparisons are `==`, `!=`, `>`, `>=`, `<`, and `<=` on dotted fields. A field projection maps to terminal `project FIELD`; it returns a bounded derived projection with source/SHA/line provenance for each row, not raw Evidence bodies. Complex jq programs are intentionally not emulated.
-
-### TraceCite-native search/filter
-
-```text
-all
-search TEXT
-regex REGEX
-exclude TEXT
-exclude-regex REGEX
 where FIELD == VALUE
 where FIELD != VALUE
 where FIELD > VALUE
@@ -168,134 +79,126 @@ missing FIELD
 lines START [END]
 ```
 
-`FIELD` can be a Segmenter/JSON field, dotted nested field, `timestamp`, `source`, `text`, `line`/`start_line`, or `end_line`.
+`FIELD` may be a Segmenter/JSON field, dotted field, `timestamp`, `source`, `text`, `line`/`start_line`, or `end_line`.
 
-### Transform/select
+### Select/transform
 
 ```text
 sort FIELD [asc|desc] [numeric]
 reverse
-take N
 head N
+tail N
+take N
 first N
 last N
-tail N
 near LINE [BEFORE] [AFTER]
 near line=LINE before=N after=N
 seek LINE [BEFORE] [AFTER]
 ```
 
-`take/head/first/last/tail` intentionally change query semantics. Do not add them merely to bypass `too_broad` unless a subset is actually the question being asked.
+Familiar forms such as `head -30`, `head -n 30`, `sort -n`, `sort -nr`, and `sed -n '100,150p'` are accepted when mechanically equivalent.
 
-### Aggregate / derived projection
+### Aggregate / projection
 
 ```text
 count
 group FIELD
 distinct FIELD
-uniq FIELD
 project FIELD
 ```
 
-Prefer aggregate stages when the intermediate match set is large but the fact needed is small. `project FIELD` is terminal and returns derived values plus provenance. It does not turn transformed values into raw Evidence.
+Prefer aggregates when a large internal match set can answer the question with a small result. `group FIELD` already returns groups ordered by count, so do not split a simple service/error distribution into many separate searches.
+
+Projection is terminal internally, but common Agent spelling is rewritten when equivalent. For example:
+
+```text
+project timestamp | sort timestamp asc numeric | head 3
+jq -r '.timestamp' | sort -n | head -3
+```
+
+is executed as sort/select first and project last.
+
+Simple jq filters include:
+
+```text
+jq 'select(.statusCode >= 500)'
+jq 'select(.serviceName == "route")'
+jq 'select(.message | test("503"))'
+jq -r '.serviceName'
+```
+
+Complex jq/sed programs are intentionally not emulated.
 
 ### Compose work into one call
 
-Prefer one pipeline when you already know the mechanical narrowing steps. Do not repeatedly search, inspect a count, and then issue another equivalent search when the same operations can stay Runtime-side.
+Prefer:
 
 ```text
-grep -Ei 'panic|fatal|error|failed' | grep -i 'runtime' | head -30
+grep -Ei 'panic|fatal|error|failed' | grep -i runtime | head -30
+search statusCode | where statusCode >= 500 | group serviceName
+search request_id=abc | near line=94771 before=3 after=5
 ```
+
+instead of repeatedly issuing equivalent broad searches and inspecting each result separately.
+
+A scalar count may scan an arbitrarily large Runtime-internal set while returning only the scalar. Familiar no-op spelling such as `grep -c PATTERN | head 5` is accepted as the same scalar count.
+
+## Program errors
+
+Unsupported read-only syntax returns a normal tool result:
 
 ```text
-rg -i 'panic|fatal|error|failed' | wc -l
+status = error
+error_code = unsupported_program
+error = <specific unsupported stage/reason>
+data.supported_hint = <canonical alternatives>
 ```
+
+Rewrite the unsupported stage once using `search`, `regex`, `where`, `sort`, `count`, `group`, `distinct`, `project`, or explicit selection. Do not interpret this as a malformed MCP parameter call and do not switch to native shell access for TraceCite-only evidence.
+
+## Novelty / repeated Evidence
+
+For a repeated-only match, expect a compact receipt such as:
 
 ```text
-search 'statusCode' | where statusCode >= 500 | where serviceName == ts-route-service
+data.novelty.state = no_new_evidence
+data.novelty.new_evidence = 0
+data.novelty.repeated_evidence = N
+data.novelty.matched_evidence = N
+data.novelty.query_repeated = true|false
+data.existing_evidence_summary.count = N
+data.existing_evidence_summary.representative = [at most two pointers]
 ```
 
-```text
-search 'statusCode' | where statusCode >= 500 | group serviceName
-```
+The representative pointer is orientation/recovery metadata, not proof that only those two records matched. Use the exact count for coverage. If another look at old evidence is genuinely needed, materialize/replay a known pointer instead of asking TraceCite to resend every repeated locator.
 
-```text
-search 'request_id=abc' | near line=94771 before=3 after=5
-```
-
-Time/format scope can be passed to `tracecite_run` with `last`, `since`, `until`, and `segmenter`.
-
-If a familiar Unix option is not supported, use the error to rewrite that stage with `search`, `regex`, `where`, `count`, `group`, `project`, `head` or another documented TraceCite stage. Do not switch to native shell access for a TraceCite-only evidence file.
+`no_new_evidence` applies to the current query direction only. A genuinely different hypothesis may justify a different query. Repeating equivalent queries does not.
 
 ## `too_broad`
 
-A normal Evidence Shell search has no hidden candidate-count truncation. The complete final matched Record set either fits the configured policy or TraceCite returns:
+A normal Evidence search has no hidden first-N candidate truncation. The complete final matched Record set either fits the Host policy or TraceCite returns `status=too_broad`, `evidence=[]`, and `data.refine_query=true`.
 
-```text
-status = too_broad
-coverage.too_broad = true
-data.reason = MATCHED_EVIDENCE_BUDGET_EXCEEDED
-data.refine_query = true
-evidence = []
-```
+Refine with a more selective literal/regex, field predicate, time/line scope, or compact aggregate. Do not change the budget.
 
-An aggregate or derived projection can similarly exceed its own transport budget.
+## SourceVersion / materialize
 
-When this happens, refine by adding more selective literals/regex/field predicates, narrowing time or line scope, or changing the question to a compact aggregate. Do not change the budget.
+The RetrievalSession is the stability boundary. First access binds one immutable SourceVersion for that logical source. Reuse the same session so later search/materialize/replay operate in the same evidence world.
 
-## SourceVersion / session stability
+Shell Evidence pointers may contain `ref`, `uri`, `start_line`, `end_line`, `sha256`, `materialize_source`, and a bounded `preview`. For final reasoning/citation, materialize the exact selected range with its SHA when available.
 
-The RetrievalSession is the stability boundary. On first access to a logical source, TraceCite binds one immutable SourceVersion for that `session_id`.
-
-For the rest of that session:
-
-- mutable/live source changes do not silently refresh the version;
-- snapshot/live cut/SHA work is not repeated for every Agent search;
-- every `tracecite_run`, materialize and replay operates in the same stable evidence world.
-
-A new RetrievalSession may reuse an already verified version if the source fingerprint is unchanged, or bind a new version if it changed.
-
-The Agent does not control `snapshot`, `max_evidence`, `max_line_chars`, source mode, live cut policy, Evidence token budget, or Evidence byte budget. Do not pass those fields to compatibility query retrieval.
-
-## Materialize
-
-Each shell Evidence row may contain:
-
-- `ref`: logical caller-visible source/line reference;
-- `uri`: stable Evidence identity;
-- `start_line` / `end_line`;
-- `sha256`;
-- `materialize_source`: exact immutable snapshot/segment path to use for exact recovery;
-- `preview`: bounded orientation text.
-
-For final reasoning/citation, call `tracecite_materialize` with the row's `materialize_source`, exact line/range and SHA when available. The Agent may choose `before`/`after`, but the maximum returned Evidence size remains a User/Host limit and is not an Agent argument.
-
-Materialized raw text is Evidence. An unmaterialized preview/pointer or projected value is a navigation/derived result, not surrounding raw context you have already inspected.
-
-## Compatibility surfaces
-
-`tracecite_retrieve` remains for source/provider operations and old clients. A query target is internally translated to Evidence Shell and must not contain `snapshot`, `max_evidence`, `max_line_chars`, or `fold`.
-
-`tracecite_aggregate` is legacy count compatibility and requires `session_id`. For new group/distinct/count work, use `tracecite_run` so the operation is bound to the same SessionSourceView.
-
-## Missing source recovery
-
-If a tool returns `error_code=source_not_found` with `available_sources`, select an appropriate Host-allowed path from that inventory. Do not guess paths outside the allowlist or scan the host filesystem.
+The Agent does not control snapshot mode, Evidence budgets, source-mode policy, or materialize output ceilings.
 
 ## Evidence semantics
 
 ```text
 no_match                  != impossible event
-new_evidence=0            != investigation complete
-repeated_evidence>0       != useless evidence
+no_new_evidence           != investigation complete
+query_repeated=true       -> do not repeat that query
+repeated_evidence>0       != new information
 coverage.complete         != causal chain complete
 integrity verified        != causal conclusion verified
 status=too_broad          != no evidence exists
 projected/aggregate value != raw Evidence body
 ```
 
-TraceCite reports mechanical facts. The Agent decides what they mean.
-
-## Extensions
-
-Installed TraceCite extensions may expose dynamic capability tools. Read each tool description and declared schema. Never invent Host authorization/safety grants or bypass a denied capability. Live actions should only be used when the task explicitly requires that side effect.
+TraceCite reports mechanical facts. The Agent decides what they mean, and must keep conclusion precision within the precision supported by the evidence.
