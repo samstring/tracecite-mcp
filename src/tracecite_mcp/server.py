@@ -334,13 +334,18 @@ def tracecite_analyze(
     source: str,
     analyses: list[dict[str, str]],
     segmenter: str = "auto",
+    last: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
 ) -> dict[str, Any]:
-    """Run several caller-selected bounded aggregate programs in one tool call.
+    """Run several caller-selected bounded computations in one tool call.
 
     Use this when the Agent has already decided that multiple mechanical
-    count/group/distinct/top-K checks are needed over the same evidence source.
-    TraceCite may fuse compatible scans internally. This tool does not choose
-    which analyses are relevant and does not perform causal reasoning.
+    aggregate or bounded top-K/project checks are needed over the same evidence
+    source. Optional last/since/until are explicit mechanical scopes applied to
+    the whole batch. TraceCite may fuse compatible scans internally. This tool
+    does not choose which analyses or windows are relevant and does not perform
+    causal reasoning.
     """
 
     if not isinstance(analyses, list):
@@ -364,6 +369,9 @@ def tracecite_analyze(
                 source=resolved_source,
                 analyses=tuple(specs),
                 segmenter=segmenter,
+                last=last,
+                since=since,
+                until=until,
             ),
             policy=_host_evidence_policy(),
             session=store,
