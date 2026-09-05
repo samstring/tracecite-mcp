@@ -7,6 +7,8 @@ description: Use TraceCite as a session-stable Evidence Compute Runtime. Batch a
 
 TraceCite is not a planner or root-cause oracle. You decide what you need to know, which hypotheses matter, how to interpret results, and when the investigation is sufficient. TraceCite performs mechanical evidence computation while preserving SourceVersion identity, provenance, coverage, novelty, and Host-owned transport limits.
 
+The Host may expose TraceCite as direct tools. When `tracecite_analyze`, `tracecite_run`, `tracecite_materialize`, and/or `tracecite_replay` are already present in the tool list, use them directly. Do **not** load MCP scripting/proxy/discovery skills, search the filesystem for MCP helpers, inspect adapter internals, or probe an MCP CLI merely to rediscover tools that are already registered. Tool discovery is only appropriate when the Host has not provided the required direct capability.
+
 ## Usage contract
 
 1. Reuse one `session_id` throughout an investigation so search, compute, materialize, and replay stay in one immutable evidence world.
@@ -18,6 +20,7 @@ TraceCite is not a planner or root-cause oracle. You decide what you need to kno
 7. If `status=too_broad`, reduce the requested output mechanically: narrow the scope/predicate, ask for a compact aggregate, or make an explicit bounded selection. Do not enlarge Host budgets and do not treat an arbitrary first-N sample as complete evidence.
 8. Evidence token/byte limits, source lifecycle/snapshot policy, materialization ceilings, and compute policy belong to the User/Host, not the Agent.
 9. Do not bypass a TraceCite-only evidence boundary with native grep/read/bash.
+10. Use request-level `last` / `since` / `until` for a whole-operation time scope when that is what you mean. A `where` stage is one field predicate; combine several predicates with additional pipeline stages unless the tool schema explicitly documents another boolean form.
 
 These rules organize computation only. They never prescribe which service, metric, event, time window, comparison, hypothesis, or stopping condition is correct for a task.
 
@@ -64,7 +67,7 @@ If the complete mechanical pipeline is already known, express it in one `traceci
 Examples of generic shapes:
 
 ```text
-where FIELD >= VALUE | group OTHER_FIELD | sort count desc | head 10
+where FIELD >= VALUE | where OTHER_FIELD == VALUE | group THIRD_FIELD | sort count desc | head 10
 sort FIELD asc numeric | head 3 | project FIELD
 search TEXT | near line=LINE before=3 after=5
 ```
